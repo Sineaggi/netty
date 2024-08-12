@@ -5,7 +5,7 @@ module io.netty5.handler {
     exports io.netty5.handler.ssl.util;
     exports io.netty5.handler.timeout;
     exports io.netty5.handler.ssl.ocsp;
-    requires alpn.api;
+    exports io.netty5.handler.ipfilter;
     requires io.netty.tcnative.classes.openssl;
     requires io.netty5.buffer;
     requires io.netty5.codec;
@@ -13,7 +13,6 @@ module io.netty5.handler {
     requires io.netty5.resolver;
     requires io.netty5.transport.unix.common;
     requires io.netty5.transport;
-    requires npn.api;
     requires org.bouncycastle.pkix;
     requires org.bouncycastle.provider;
     requires org.conscrypt;

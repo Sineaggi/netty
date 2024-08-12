@@ -21,9 +21,9 @@ import io.netty5.channel.ChannelHandlerMask.Skip;
 import io.netty5.channel.embedded.EmbeddedChannel;
 import io.netty5.channel.local.LocalAddress;
 import io.netty5.channel.local.LocalChannel;
-import io.netty5.channel.local.LocalHandler;
+import io.netty5.channel.local.LocalIoHandler;
 import io.netty5.channel.local.LocalServerChannel;
-import io.netty5.channel.nio.NioHandler;
+import io.netty5.channel.nio.NioIoHandler;
 import io.netty5.channel.socket.nio.NioSocketChannel;
 import io.netty5.util.AbstractReferenceCounted;
 import io.netty5.util.ReferenceCounted;
@@ -35,6 +35,7 @@ import io.netty5.util.concurrent.Promise;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -64,10 +65,15 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 public class DefaultChannelPipelineTest {
 
-    private static final EventLoopGroup group = new MultithreadEventLoopGroup(1, LocalHandler.newFactory());
+    private static EventLoopGroup group;
 
     private Channel self;
     private Channel peer;
+
+    @BeforeAll
+    public static void beforeClass() {
+        group = new MultithreadEventLoopGroup(1, LocalIoHandler.newFactory());
+    }
 
     @AfterAll
     public static void afterClass() throws Exception {
@@ -959,7 +965,7 @@ public class DefaultChannelPipelineTest {
     @Test
     @Timeout(value = 3000, unit = TimeUnit.MILLISECONDS)
     public void testAddBefore() throws Throwable {
-        EventLoopGroup defaultGroup = new MultithreadEventLoopGroup(2, LocalHandler.newFactory());
+        EventLoopGroup defaultGroup = new MultithreadEventLoopGroup(2, LocalIoHandler.newFactory());
         try {
             EventLoop eventLoop1 = defaultGroup.next();
             EventLoop eventLoop2 = defaultGroup.next();
@@ -986,7 +992,7 @@ public class DefaultChannelPipelineTest {
     @Test
     @Timeout(value = 3000, unit = TimeUnit.MILLISECONDS)
     public void testAddInListenerNio() throws Throwable {
-        EventLoopGroup nioEventLoopGroup = new MultithreadEventLoopGroup(1, NioHandler.newFactory());
+        EventLoopGroup nioEventLoopGroup = new MultithreadEventLoopGroup(1, NioIoHandler.newFactory());
         try {
             testAddInListener(new NioSocketChannel(nioEventLoopGroup.next()));
         } finally {
@@ -1154,7 +1160,7 @@ public class DefaultChannelPipelineTest {
     // Test for https://github.com/netty/netty/issues/8676.
     @Test
     public void testHandlerRemovedOnlyCalledWhenHandlerAddedCalled() throws Exception {
-        EventLoopGroup group = new MultithreadEventLoopGroup(1, LocalHandler.newFactory());
+        EventLoopGroup group = new MultithreadEventLoopGroup(1, LocalIoHandler.newFactory());
         try {
             final AtomicReference<Error> errorRef = new AtomicReference<>();
 

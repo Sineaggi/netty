@@ -26,15 +26,16 @@ import io.netty5.handler.codec.http.headers.HttpSetCookie.SameSite;
 import io.netty5.util.Resource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.TimeZone;
 
-import static io.netty5.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_HEADER_SIZE;
-import static io.netty5.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_INITIAL_LINE_LENGTH;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -56,7 +57,7 @@ public class HttpResponseDecoderTest {
     }
 
     private void setUpNoValidation() {
-        setUpDecoder(new HttpResponseDecoder(DEFAULT_MAX_INITIAL_LINE_LENGTH, DEFAULT_MAX_HEADER_SIZE, false));
+        setUpDecoder(new HttpResponseDecoder(new HttpDecoderConfig().setValidateHeaders(false)));
     }
 
     private void setUpDecoder(HttpResponseDecoder decoder) {
@@ -748,6 +749,14 @@ public class HttpResponseDecoderTest {
         testInvalidHeaders0(responseBuffer);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = { "HTP/1.1", "HTTP", "HTTP/1x", "Something/1.1", "HTTP/1",
+            "HTTP/1.11", "HTTP/11.1", "HTTP/A.1", "HTTP/1.B"})
+    public void testInvalidVersion(String version) {
+        testInvalidHeaders0(allocator.copyOf(
+                version + " 200 OK\n\r\nHost: whatever\r\n\r\n", StandardCharsets.US_ASCII));
+    }
+
     private void testInvalidHeaders0(Buffer responseBuffer) {
         assertTrue(channel.writeInbound(responseBuffer));
         HttpResponse response = channel.readInbound();
@@ -796,7 +805,7 @@ public class HttpResponseDecoderTest {
         setUpNoValidation();
         String cookieString = "Set-Cookie: myCookie=myValue;expires="
                               + DateFormatter.format(new Date(System.currentTimeMillis() + 50000))
-                              + ";path=/apathsomewhere;domain=.adomainsomewhere;secure;SameSite=None";
+                              + ";path=/apathsomewhere;domain=.adomainsomewhere;secure;SameSite=None;Partitioned";
         HttpSetCookie cookie = parseRequestWithCookies(cookieString).headers().getSetCookie("myCookie");
         assertNotNull(cookie);
         assertEquals("myValue", cookie.value());
@@ -806,13 +815,14 @@ public class HttpResponseDecoderTest {
         assertTrue(cookie.isSecure());
 
         assertEquals(SameSite.None, cookie.sameSite());
+        assertTrue(cookie.isPartitioned());
     }
 
     @Test
     public void setCookieHeaderDecodingSingleCookieV0Validating() {
         String cookieString = "Set-Cookie: myCookie=myValue; expires="
                               + DateFormatter.format(new Date(System.currentTimeMillis() + 50000))
-                              + "; path=/apathsomewhere; domain=.adomainsomewhere; secure; SameSite=None";
+                              + "; path=/apathsomewhere; domain=.adomainsomewhere; secure; SameSite=None; Partitioned";
         HttpSetCookie cookie = parseRequestWithCookies(cookieString).headers().getSetCookie("myCookie");
         assertNotNull(cookie);
         assertEquals("myValue", cookie.value());
@@ -821,6 +831,7 @@ public class HttpResponseDecoderTest {
         assertEquals("/apathsomewhere", cookie.path());
         assertTrue(cookie.isSecure());
         assertEquals(SameSite.None, cookie.sameSite());
+        assertTrue(cookie.isPartitioned());
     }
 
     @Test

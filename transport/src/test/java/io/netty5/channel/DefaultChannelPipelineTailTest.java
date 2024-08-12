@@ -16,7 +16,7 @@
 package io.netty5.channel;
 
 import io.netty5.buffer.Buffer;
-import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AutoClose;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class DefaultChannelPipelineTailTest {
     private static final long TIMEOUT_SEC = 10L;
 
+    @AutoClose("shutdownGracefully")
     private static EventLoopGroup group;
 
     @BeforeAll
@@ -63,18 +64,33 @@ public class DefaultChannelPipelineTailTest {
             }
 
             @Override
-            public void register(IoHandle handle) {
-                // NOOP
+            public IoRegistration register(EventLoop eventLoop, IoHandle handle) {
+                return new IoRegistration() {
+                    @Override
+                    public long submit(IoOps ops) {
+                        return 0;
+                    }
+
+                    @Override
+                    public boolean isValid() {
+                        return false;
+                    }
+
+                    @Override
+                    public void cancel() {
+                        // NOOP.
+                    }
+
+                    @Override
+                    public IoHandler ioHandler() {
+                        return null;
+                    }
+                };
             }
 
             @Override
-            public void deregister(IoHandle handle) {
-                // NOOP
-            }
-
-            @Override
-            public void wakeup(boolean inEventLoop) {
-                if (!inEventLoop) {
+            public void wakeup(EventLoop eventLoop) {
+                if (!eventLoop.inEventLoop()) {
                     synchronized (lock) {
                         lock.notify();
                     }
@@ -83,14 +99,9 @@ public class DefaultChannelPipelineTailTest {
 
             @Override
             public boolean isCompatible(Class<? extends IoHandle> handleType) {
-                return MyChannel.class.isAssignableFrom(handleType);
+                return MyChannel.MyIoHandle.class.isAssignableFrom(handleType);
             }
         });
-    }
-
-    @AfterAll
-    public static void destroy() {
-        group.shutdownGracefully();
     }
 
     @Test
@@ -235,8 +246,28 @@ public class DefaultChannelPipelineTailTest {
         private boolean inputShutdown;
         private boolean outputShutdown;
 
+        private static final class MyIoHandle implements IoHandle {
+
+            static final MyIoHandle INSTANCE = new MyIoHandle();
+
+            @Override
+            public void handle(IoRegistration registration, IoEvent ioEvent) {
+                // NOOP
+            }
+
+            @Override
+            public void close() {
+                // NOOP
+            }
+        }
+
         protected MyChannel(EventLoop eventLoop) {
-            super(null, eventLoop, false);
+            super(null, eventLoop, false, MyIoHandle.class);
+        }
+
+        @Override
+        protected IoHandle ioHandle() {
+            return MyIoHandle.INSTANCE;
         }
 
         @Override

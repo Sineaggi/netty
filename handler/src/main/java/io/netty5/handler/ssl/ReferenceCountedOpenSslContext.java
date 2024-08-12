@@ -114,10 +114,8 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
 
     static final boolean SERVER_ENABLE_SESSION_CACHE =
             SystemPropertyUtil.getBoolean("io.netty5.handler.ssl.openssl.sessionCacheServer", true);
-    // session caching is disabled by default on the client side due a JDK bug:
-    // https://mail.openjdk.java.net/pipermail/security-dev/2021-March/024758.html
     static final boolean CLIENT_ENABLE_SESSION_CACHE =
-            SystemPropertyUtil.getBoolean("io.netty5.handler.ssl.openssl.sessionCacheClient", false);
+            SystemPropertyUtil.getBoolean("io.netty5.handler.ssl.openssl.sessionCacheClient", true);
 
     /**
      * The OpenSSL SSL_CTX object.
@@ -154,6 +152,9 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
     final Certificate[] keyCertChain;
     final ClientAuth clientAuth;
     final String[] protocols;
+    final String endpointIdentificationAlgorithm;
+    final boolean hasTLSv13Cipher;
+
     final boolean enableOcsp;
     final OpenSslEngineMap engineMap = new DefaultOpenSslEngineMap();
     final ReadWriteLock ctxLock = new ReentrantReadWriteLock();
@@ -208,7 +209,8 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
     ReferenceCountedOpenSslContext(Iterable<String> ciphers, CipherSuiteFilter cipherFilter,
                                    OpenSslApplicationProtocolNegotiator apn, int mode, Certificate[] keyCertChain,
                                    ClientAuth clientAuth, String[] protocols, boolean startTls, boolean enableOcsp,
-                                   boolean leakDetection, Map.Entry<SslContextOption<?>, Object>... ctxOptions)
+                                   boolean leakDetection, String endpointIdentificationAlgorithm,
+                                   Map.Entry<SslContextOption<?>, Object>... ctxOptions)
             throws SSLException {
         super(startTls);
 
@@ -263,6 +265,7 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
         this.mode = mode;
         this.clientAuth = isServer() ? requireNonNull(clientAuth, "clientAuth") : ClientAuth.NONE;
         this.protocols = protocols == null ? OpenSsl.defaultProtocols(mode == SSL.SSL_MODE_CLIENT) : protocols;
+        this.endpointIdentificationAlgorithm = endpointIdentificationAlgorithm;
         this.enableOcsp = enableOcsp;
 
         this.keyCertChain = keyCertChain == null ? null : keyCertChain.clone();
@@ -280,7 +283,7 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
         boolean success = false;
         try {
             boolean tlsv13Supported = OpenSsl.isTlsv13Supported();
-
+            boolean anyTlsv13Ciphers = false;
             try {
                 int protocolOpts = SSL.SSL_PROTOCOL_SSLV3 | SSL.SSL_PROTOCOL_TLSV1 |
                         SSL.SSL_PROTOCOL_TLSV1_1 | SSL.SSL_PROTOCOL_TLSV1_2;
@@ -312,8 +315,11 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
                     SSLContext.setCipherSuite(ctx, cipherBuilder.toString(), false);
                     if (tlsv13Supported) {
                         // Set TLSv1.3 ciphers.
-                        SSLContext.setCipherSuite(ctx,
-                                OpenSsl.checkTls13Ciphers(logger, cipherTLSv13Builder.toString()), true);
+                        String tlsv13Ciphers = OpenSsl.checkTls13Ciphers(logger, cipherTLSv13Builder.toString());
+                        SSLContext.setCipherSuite(ctx, tlsv13Ciphers, true);
+                        if (!tlsv13Ciphers.isEmpty()) {
+                            anyTlsv13Ciphers = true;
+                        }
                     }
                 }
             } catch (SSLException e) {
@@ -350,10 +356,12 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
 
             if (!tlsv13Supported) {
                 // Explicit disable TLSv1.3
-                // See https://github.com/netty/netty/issues/12968
+                // See:
+                //  - https://github.com/netty/netty/issues/12968
                 options |= SSL.SSL_OP_NO_TLSv1_3;
             }
 
+            hasTLSv13Cipher = anyTlsv13Ciphers;
             SSLContext.setOptions(ctx, options);
 
             // We need to enable SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER as the memory address may change between
@@ -485,7 +493,8 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
     }
 
     SSLEngine newEngine0(BufferAllocator alloc, String peerHost, int peerPort, boolean jdkCompatibilityMode) {
-        return new ReferenceCountedOpenSslEngine(this, alloc, peerHost, peerPort, jdkCompatibilityMode, true);
+        return new ReferenceCountedOpenSslEngine(this, alloc, peerHost, peerPort, jdkCompatibilityMode, true,
+                endpointIdentificationAlgorithm);
     }
 
     /**

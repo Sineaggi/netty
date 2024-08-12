@@ -17,8 +17,8 @@ package io.netty5.handler.codec.http2;
 
 import io.netty5.buffer.Buffer;
 import io.netty5.handler.codec.http2.headers.Http2Headers;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.AutoClose;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,6 +36,7 @@ public class HpackEncoderTest {
     private HpackDecoder hpackDecoder;
     private HpackEncoder hpackEncoder;
     private Http2Headers mockHeaders;
+    @AutoClose
     private Buffer buf;
 
     @BeforeEach
@@ -44,11 +45,6 @@ public class HpackEncoderTest {
         hpackDecoder = new HpackDecoder(DEFAULT_HEADER_LIST_SIZE);
         mockHeaders = mock(Http2Headers.class);
         buf = onHeapAllocator().allocate(256);
-    }
-
-    @AfterEach
-    public void teardown() {
-        buf.close();
     }
 
     @Test
@@ -194,6 +190,48 @@ public class HpackEncoderTest {
             );
             buf.resetOffsets();
         }
+    }
+
+    @Test
+    public void testSanitization() throws Http2Exception {
+        final int headerValueSize = 300;
+        StringBuilder actualHeaderValueBuilder = new StringBuilder();
+        StringBuilder expectedHeaderValueBuilder = new StringBuilder();
+
+        for (int i = 0; i < headerValueSize; i++) {
+            actualHeaderValueBuilder.append((char) i); // Use the index as the code point value of the character.
+            if (i <= 255) {
+                expectedHeaderValueBuilder.append((char) i);
+            } else {
+                expectedHeaderValueBuilder.append('?'); // Expect this character to be sanitized.
+            }
+        }
+        String actualHeaderValue = actualHeaderValueBuilder.toString();
+        String expectedHeaderValue = expectedHeaderValueBuilder.toString();
+        HpackEncoder encoderWithHuffmanEncoding =
+                new HpackEncoder(false, 64, 0); // Low Huffman code threshold.
+        HpackEncoder encoderWithoutHuffmanEncoding =
+                new HpackEncoder(false, 64, Integer.MAX_VALUE); // High Huffman code threshold.
+
+        // Expect the same decoded header value regardless of whether Huffman encoding is enabled or not.
+        verifyHeaderValueSanitization(encoderWithHuffmanEncoding, actualHeaderValue, expectedHeaderValue);
+        verifyHeaderValueSanitization(encoderWithoutHuffmanEncoding, actualHeaderValue, expectedHeaderValue);
+    }
+
+    private void verifyHeaderValueSanitization(
+            HpackEncoder encoder,
+            String actualHeaderValue,
+            String expectedHeaderValue
+    ) throws Http2Exception {
+
+        String headerKey = "some-key";
+        Http2Headers toBeEncodedHeaders = Http2Headers.newHeaders(false).add(headerKey, actualHeaderValue);
+        encoder.encodeHeaders(0, buf, toBeEncodedHeaders, Http2HeadersEncoder.NEVER_SENSITIVE);
+        Http2Headers decodedHeaders = Http2Headers.newHeaders(false);
+        hpackDecoder.decode(0, buf, decodedHeaders, true);
+        buf.resetOffsets();
+        String decodedHeaderValue = decodedHeaders.get(headerKey).toString();
+        Assertions.assertEquals(expectedHeaderValue, decodedHeaderValue);
     }
 
     private void setMaxTableSize(int maxHeaderTableSize) throws Http2Exception {

@@ -30,7 +30,6 @@
   <name>Netty5/Example</name>
 
   <properties>
-    <japicmp.skip>true</japicmp.skip>
     <javaModuleName>io.netty5.example</javaModuleName>
   </properties>
 
@@ -85,10 +84,6 @@
       <groupId>${conscrypt.groupId}</groupId>
       <artifactId>${conscrypt.artifactId}</artifactId>
       <classifier>${conscrypt.classifier}</classifier>
-    </dependency>
-    <dependency>
-      <groupId>org.eclipse.jetty.npn</groupId>
-      <artifactId>npn-api</artifactId>
     </dependency>
     <dependency>
       <groupId>com.jcraft</groupId>

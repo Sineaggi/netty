@@ -29,12 +29,12 @@ jobs:
   prepare-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           ref: main
 
       - name: Set up JDK 11
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '11'
@@ -52,7 +52,8 @@ jobs:
 
       # Cache .m2/repository
       - name: Cache local Maven repository
-        uses: actions/cache@v3
+        uses: actions/cache@v4
+        continue-on-error: true
         with:
           path: ~/.m2/repository
           key: ${{ runner.os }}-maven-prepare-release-${{ hashFiles('**/pom.xml') }}
@@ -69,7 +70,7 @@ jobs:
         run: ./.github/scripts/release_checkout_tag.sh release.properties
 
       - name: Upload workspace
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: prepare-release-workspace
           path: ${{ github.workspace }}/**
@@ -91,7 +92,7 @@ jobs:
 
     steps:
       - name: Download release-workspace
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: prepare-release-workspace
           path: ./prepare-release-workspace/
@@ -100,7 +101,7 @@ jobs:
         run: chmod 755 ./prepare-release-workspace/mvnw
 
       - name: Set up JDK 11
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '11'
@@ -116,16 +117,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY_PEM }}
           known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
 
-      # Enable caching of Docker layers
-      - uses: satackey/action-docker-layer-caching@v0.0.11
-        continue-on-error: true
-        with:
-          key: ${{ runner.os }}-staging-docker-cache-${{ matrix.setup }}-{hash}
-          restore-keys: |
-            ${{ runner.os }}-staging-docker-cache-${{ matrix.setup }}-
-            ${{ runner.os }}-staging-docker-cache-
-
-      - uses: s4u/maven-settings-action@v2.8.0
+      - uses: s4u/maven-settings-action@v3.0.0
         with:
           servers: |
             [{
@@ -136,7 +128,8 @@ jobs:
 
       # Cache .m2/repository
       - name: Cache local Maven repository
-        uses: actions/cache@v3
+        uses: actions/cache@v4
+        continue-on-error: true
         with:
           path: ~/.m2/repository
           key: ${{ runner.os }}-maven-${{ matrix.setup }}-${{ hashFiles('**/pom.xml') }}
@@ -149,7 +142,7 @@ jobs:
 
       - name: Build docker image
         working-directory: ./prepare-release-workspace/
-        run: docker-compose ${{ matrix.docker-compose-build }}
+        run: docker compose ${{ matrix.docker-compose-build }}
 
       - name: Stage release to local staging directory
         working-directory: ./prepare-release-workspace/
@@ -157,10 +150,10 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_KEYNAME: ${{ secrets.GPG_KEYNAME }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: docker-compose ${{ matrix.docker-compose-run }}
+        run: docker compose ${{ matrix.docker-compose-run }}
 
       - name: Upload local staging directory
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.setup }}-local-staging
           path: ~/local-staging
@@ -178,7 +171,7 @@ jobs:
     needs: stage-release-linux
     steps:
       - name: Download release-workspace
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: prepare-release-workspace
           path: ./prepare-release-workspace/
@@ -187,7 +180,7 @@ jobs:
         run: chmod 755 ./prepare-release-workspace/mvnw
 
       - name: Set up JDK 11
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '11'
@@ -206,13 +199,13 @@ jobs:
       # Hardcode the staging artifacts that need to be downloaded.
       # These must match the matrix setups. There is currently no way to pull this out of the config.
       - name: Download linux-aarch64 staging directory
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: linux-aarch64-local-staging
           path: ~/linux-aarch64-local-staging
 
       - name: Download linux-x86_64-java11 staging directory
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: linux-x86_64-java11-local-staging
           path: ~/linux-x86_64-java11-local-staging
@@ -223,7 +216,7 @@ jobs:
         working-directory: ./prepare-release-workspace/
         run: bash ./.github/scripts/merge_local_staging.sh /home/runner/local-staging/staging ~/linux-aarch64-local-staging/staging ~/linux-x86_64-java11-local-staging/staging
 
-      - uses: s4u/maven-settings-action@v2.8.0
+      - uses: s4u/maven-settings-action@v3.0.0
         with:
           servers: |
             [{
@@ -234,7 +227,8 @@ jobs:
 
       # Cache .m2/repository
       - name: Cache local Maven repository
-        uses: actions/cache@v3
+        uses: actions/cache@v4
+        continue-on-error: true
         with:
           path: ~/.m2/repository
           key: ${{ runner.os }}-maven-deploy-staged-release-${{ hashFiles('**/pom.xml') }}

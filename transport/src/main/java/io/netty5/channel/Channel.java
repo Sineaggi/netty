@@ -117,7 +117,7 @@ import java.net.SocketAddress;
  * example, you can configure the parameters which are specific to a TCP/IP
  * socket as explained in {@link SocketChannel}.
  */
-public interface Channel extends AttributeMap, ChannelOutboundInvoker, Comparable<Channel>, IoHandle {
+public interface Channel extends AttributeMap, ChannelOutboundInvoker, Comparable<Channel> {
 
     /**
      * Returns the globally unique identifier of this {@link Channel}.
@@ -178,6 +178,11 @@ public interface Channel extends AttributeMap, ChannelOutboundInvoker, Comparabl
     boolean isOpen();
 
     /**
+     * Returns {@code true} if the {@link Channel} is registered with an {@link EventLoop}.
+     */
+    boolean isRegistered();
+
+    /**
      * Return {@code true} if the {@link Channel} is active and so connected.
      */
     boolean isActive();
@@ -225,6 +230,9 @@ public interface Channel extends AttributeMap, ChannelOutboundInvoker, Comparabl
      * requested flush operation immediately. Any write requests made when
      * this method returns {@code false} are queued until the I/O thread is
      * ready to process the queued write requests.
+     *
+     * {@link WriteBufferWaterMark} can be used to configure on which condition
+     * the write buffer would cause this channel to change writability.
      */
     default boolean isWritable() {
         return writableBytes() > 0;
@@ -234,6 +242,8 @@ public interface Channel extends AttributeMap, ChannelOutboundInvoker, Comparabl
      * Returns how many bytes can be written before the {@link Channel} becomes 'unwritable'.
      * Once a {@link Channel} becomes unwritable, all messages will be queued until the I/O thread is
      * ready to process the queued write requests.
+     *
+     * {@link WriteBufferWaterMark} can be used to define writability settings.
      *
      * @return the number of bytes that can be written before the {@link Channel} becomes unwritable.
      */

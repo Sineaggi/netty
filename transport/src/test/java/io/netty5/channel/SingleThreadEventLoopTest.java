@@ -26,6 +26,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
@@ -39,6 +41,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -53,6 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+@ResourceLock(value = "scheduler_timing", mode = ResourceAccessMode.READ)
 public class SingleThreadEventLoopTest {
 
     private static final Runnable NOOP = () -> { };
@@ -146,12 +150,14 @@ public class SingleThreadEventLoopTest {
                    is(greaterThanOrEqualTo(TimeUnit.MILLISECONDS.toNanos(500))));
     }
 
+    @ResourceLock(value = "scheduler_timing", mode = ResourceAccessMode.READ_WRITE)
     @Test
     @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
     public void scheduleTaskAtFixedRateA() throws Exception {
         testScheduleTaskAtFixedRate(loopA);
     }
 
+    @ResourceLock(value = "scheduler_timing", mode = ResourceAccessMode.READ_WRITE)
     @Test
     @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
     public void scheduleTaskAtFixedRateB() throws Exception {
@@ -164,11 +170,6 @@ public class SingleThreadEventLoopTest {
         final CountDownLatch allTimeStampsLatch = new CountDownLatch(expectedTimeStamps);
         Future<?> f = loopA.scheduleAtFixedRate(() -> {
             timestamps.add(System.nanoTime());
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException e) {
-                // Ignore
-            }
             allTimeStampsLatch.countDown();
         }, 100, 100, TimeUnit.MILLISECONDS);
         allTimeStampsLatch.await();
@@ -472,17 +473,17 @@ public class SingleThreadEventLoopTest {
         }
 
         @Override
-        public Future<Void> registerForIo(IoHandle handle) {
-            return newSucceededFuture(null);
-        }
-
-        @Override
-        public Future<Void> deregisterForIo(IoHandle handle) {
-            return newSucceededFuture(null);
+        public Future<IoRegistration> register(IoHandle handle) {
+            return newSucceededFuture(new TestIoRegistration());
         }
 
         @Override
         public boolean isCompatible(Class<? extends IoHandle> handleType) {
+            return true;
+        }
+
+        @Override
+        public boolean isIoType(Class<? extends IoHandler> handlerType) {
             return true;
         }
     }
@@ -523,18 +524,40 @@ public class SingleThreadEventLoopTest {
         }
 
         @Override
-        public Future<Void> registerForIo(IoHandle handleType) {
-            return newSucceededFuture(null);
-        }
-
-        @Override
-        public Future<Void> deregisterForIo(IoHandle handleType) {
-            return newSucceededFuture(null);
+        public Future<IoRegistration> register(IoHandle handle) {
+            return newSucceededFuture(new TestIoRegistration());
         }
 
         @Override
         public boolean isCompatible(Class<? extends IoHandle> handleType) {
             return true;
+        }
+
+        @Override
+        public boolean isIoType(Class<? extends IoHandler> handlerType) {
+            return true;
+        }
+    }
+
+    private static final class TestIoRegistration extends AtomicBoolean implements IoRegistration {
+        @Override
+        public long submit(IoOps ops) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean isValid() {
+            return get();
+        }
+
+        @Override
+        public void cancel() {
+            set(false);
+        }
+
+        @Override
+        public IoHandler ioHandler() {
+            return null;
         }
     }
 }

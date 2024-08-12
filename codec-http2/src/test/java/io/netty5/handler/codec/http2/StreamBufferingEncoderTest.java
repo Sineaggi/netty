@@ -27,7 +27,8 @@ import io.netty5.util.concurrent.Future;
 import io.netty5.util.concurrent.ImmediateEventExecutor;
 import io.netty5.util.concurrent.Promise;
 import io.netty5.util.internal.SilentDispose;
-import org.junit.jupiter.api.AfterEach;
+
+import org.junit.jupiter.api.AutoClose;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -53,6 +54,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyBoolean;
@@ -73,7 +75,7 @@ import static org.mockito.Mockito.when;
 @SuppressWarnings("unchecked")
 public class StreamBufferingEncoderTest {
     private static final Logger logger = LoggerFactory.getLogger(StreamBufferingEncoderTest.class);
-
+    @AutoClose
     private StreamBufferingEncoder encoder;
 
     private Http2Connection connection;
@@ -148,12 +150,6 @@ public class StreamBufferingEncoderTest {
                 new WriteBufferWaterMark(1024, Integer.MAX_VALUE));
         when(channel.getOption(ChannelOption.MESSAGE_SIZE_ESTIMATOR)).thenReturn(DefaultMessageSizeEstimator.DEFAULT);
         handler.handlerAdded(ctx);
-    }
-
-    @AfterEach
-    public void teardown() {
-        // Close and release any buffered frames.
-        encoder.close();
     }
 
     @Test
@@ -518,6 +514,20 @@ public class StreamBufferingEncoderTest {
 
         Future<Void> f = encoderWriteHeaders(3);
         assertNotNull(f.cause());
+    }
+
+    @Test
+    public void testExhaustedStreamId() throws Http2Exception {
+        testStreamId(Integer.MAX_VALUE - 2);
+        testStreamId(connection.local().incrementAndGetNextStreamId());
+    }
+
+    private void testStreamId(int nextStreamId) throws Http2Exception {
+        connection.local().createStream(nextStreamId, false);
+        try (Buffer empty = empty()) {
+            Future<Void> channelFuture = encoder.writeData(ctx, nextStreamId, empty, 0, false);
+            assertFalse(channelFuture.isFailed());
+        }
     }
 
     private void setMaxConcurrentStreams(int newValue) {

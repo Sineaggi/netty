@@ -23,9 +23,11 @@ import io.netty5.channel.ChannelShutdownDirection;
 import io.netty5.channel.EventLoop;
 import io.netty5.channel.FileRegion;
 import io.netty5.channel.nio.AbstractNioByteChannel;
+import io.netty5.channel.nio.NioIoOps;
 import io.netty5.channel.socket.SocketChannelWriteHandleFactory;
 import io.netty5.util.concurrent.Future;
 import io.netty5.util.concurrent.GlobalEventExecutor;
+import io.netty5.util.concurrent.Promise;
 import io.netty5.util.internal.PlatformDependent;
 import io.netty5.util.internal.SocketUtils;
 
@@ -36,7 +38,6 @@ import java.net.SocketAddress;
 import java.net.SocketOption;
 import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.concurrent.Executor;
@@ -244,7 +245,7 @@ public class NioSocketChannel
             }
             boolean connected = SocketUtils.connect(javaChannel(), remoteAddress);
             if (!connected) {
-                selectionKey().interestOps(SelectionKey.OP_CONNECT);
+                addAndSubmit(NioIoOps.CONNECT);
             }
             success = true;
             return connected;
@@ -303,7 +304,7 @@ public class NioSocketChannel
                 super.doWriteNow(writeSink);
                 return;
             case 1: {
-                // Only one ByteBuf so use non-gathering write
+                // Only one Buffer so use non-gathering write
                 // Zero length buffers are not added to nioBuffers by ChannelOutboundBuffer, so there is no need
                 // to check if the total size of all the buffers is non-zero.
                 ByteBuffer buffer = nioBuffers[0];
@@ -335,7 +336,9 @@ public class NioSocketChannel
                     // because we try to read or write until the actual close happens which may be later due
                     // SO_LINGER handling.
                     // See https://github.com/netty/netty/issues/4449
-                    return executor().deregisterForIo(this).map(v -> GlobalEventExecutor.INSTANCE);
+                    Promise<Void> promise = newPromise();
+                    deregisterTransport(promise);
+                    return promise.asFuture().map(v -> GlobalEventExecutor.INSTANCE);
                 }
             } catch (Throwable ignore) {
                 // Ignore the error as the underlying channel may be closed in the meantime and so
@@ -346,7 +349,6 @@ public class NioSocketChannel
         return null;
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     protected <T> T getExtendedOption(ChannelOption<T> option) {
         SocketOption<T> socketOption = NioChannelOption.toSocketOption(option);

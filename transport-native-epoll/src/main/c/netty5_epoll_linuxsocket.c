@@ -63,7 +63,12 @@
 #define UDP_GRO 104
 #endif
 
-static jclass peerCredentialsClass = NULL;
+// IP_BIND_ADDRESS_NO_PORT is defined in linux 4.2. We define this here so older kernels can compile.
+#ifndef IP_BIND_ADDRESS_NO_PORT
+#define IP_BIND_ADDRESS_NO_PORT 24
+#endif
+
+static jweak peerCredentialsClassWeak = NULL;
 static jmethodID peerCredentialsMethodId = NULL;
 
 static jfieldID fileChannelFieldId = NULL;
@@ -164,10 +169,10 @@ static void netty5_epoll_linuxsocket_setTimeToLive(JNIEnv* env, jclass clazz, ji
 
 static void netty5_epoll_linuxsocket_setIpMulticastLoop(JNIEnv* env, jclass clazz, jint fd, jboolean ipv6, jint optval) {
     if (ipv6 == JNI_TRUE) {
-        u_int val = (u_int) optval;
+        unsigned int val = (unsigned int) optval;
         netty5_unix_socket_setOption(env, fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &val, sizeof(val));
     } else {
-        u_char val = (u_char) optval;
+        unsigned char val = (unsigned char) optval;
         netty5_unix_socket_setOption(env, fd, IPPROTO_IP, IP_MULTICAST_LOOP, &val, sizeof(val));
     }
 }
@@ -230,6 +235,10 @@ static void netty5_epoll_linuxsocket_setTcpKeepCnt(JNIEnv* env, jclass clazz, ji
 
 static void netty5_epoll_linuxsocket_setTcpUserTimeout(JNIEnv* env, jclass clazz, jint fd, jint optval) {
     netty5_unix_socket_setOption(env, fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &optval, sizeof(optval));
+}
+
+static void netty5_epoll_linuxsocket_setIpBindAddressNoPort(JNIEnv* env, jclass clazz, jint fd, jint optval) {
+    netty5_unix_socket_setOption(env, fd, IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, &optval, sizeof(optval));
 }
 
 static void netty5_epoll_linuxsocket_setIpFreeBind(JNIEnv* env, jclass clazz, jint fd, jint optval) {
@@ -539,13 +548,13 @@ static jint netty5_epoll_linuxsocket_getTimeToLive(JNIEnv* env, jclass clazz, ji
 
 static jint netty5_epoll_linuxsocket_getIpMulticastLoop(JNIEnv* env, jclass clazz, jint fd, jboolean ipv6) {
     if (ipv6 == JNI_TRUE) {
-        u_int optval;
+        unsigned int optval;
         if (netty5_unix_socket_getOption(env, fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &optval, sizeof(optval)) == -1) {
             return -1;
         }
         return (jint) optval;
     } else {
-        u_char optval;
+        unsigned char optval;
         if (netty5_unix_socket_getOption(env, fd, IPPROTO_IP, IP_MULTICAST_LOOP, &optval, sizeof(optval)) == -1) {
             return -1;
         }
@@ -580,6 +589,14 @@ static jint netty5_epoll_linuxsocket_getTcpKeepCnt(JNIEnv* env, jclass clazz, ji
 static jint netty5_epoll_linuxsocket_getTcpUserTimeout(JNIEnv* env, jclass clazz, jint fd) {
      int optval;
      if (netty5_unix_socket_getOption(env, fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &optval, sizeof(optval)) == -1) {
+         return -1;
+     }
+     return optval;
+}
+
+static jint netty5_epoll_linuxsocket_isIpBindAddressNoPort(JNIEnv* env, jclass clazz, jint fd) {
+     int optval;
+     if (netty5_unix_socket_getOption(env, fd, IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, &optval, sizeof(optval)) == -1) {
          return -1;
      }
      return optval;
@@ -694,12 +711,24 @@ static jint netty5_epoll_linuxsocket_getTcpNotSentLowAt(JNIEnv* env, jclass claz
 
 static jobject netty5_epoll_linuxsocket_getPeerCredentials(JNIEnv *env, jclass clazz, jint fd) {
      struct ucred credentials;
+     jclass peerCredentialsClass = NULL;
      if(netty5_unix_socket_getOption(env,fd, SOL_SOCKET, SO_PEERCRED, &credentials, sizeof (credentials)) == -1) {
          return NULL;
      }
      jintArray gids = (*env)->NewIntArray(env, 1);
+     if (gids == NULL) {
+        return NULL;
+     }
      (*env)->SetIntArrayRegion(env, gids, 0, 1, (jint*) &credentials.gid);
-     return (*env)->NewObject(env, peerCredentialsClass, peerCredentialsMethodId, credentials.pid, credentials.uid, gids);
+
+     NETTY_JNI_UTIL_NEW_LOCAL_FROM_WEAK(env, peerCredentialsClass, peerCredentialsClassWeak, error);
+
+     jobject creds = (*env)->NewObject(env, peerCredentialsClass, peerCredentialsMethodId, credentials.pid, credentials.uid, gids);
+
+     NETTY_JNI_UTIL_DELETE_LOCAL(env, peerCredentialsClass);
+     return creds;
+ error:
+     return NULL;
 }
 
 static jint netty5_epoll_linuxsocket_isUdpGro(JNIEnv* env, jclass clazz, jint fd) {
@@ -778,6 +807,7 @@ static const JNINativeMethod fixed_method_table[] = {
   { "setTcpKeepIntvl", "(II)V", (void *) netty5_epoll_linuxsocket_setTcpKeepIntvl },
   { "setTcpKeepCnt", "(II)V", (void *) netty5_epoll_linuxsocket_setTcpKeepCnt },
   { "setTcpUserTimeout", "(II)V", (void *) netty5_epoll_linuxsocket_setTcpUserTimeout },
+  { "setIpBindAddressNoPort", "(II)V", (void *) netty5_epoll_linuxsocket_setIpBindAddressNoPort },
   { "setIpFreeBind", "(II)V", (void *) netty5_epoll_linuxsocket_setIpFreeBind },
   { "setIpTransparent", "(II)V", (void *) netty5_epoll_linuxsocket_setIpTransparent },
   { "setIpRecvOrigDestAddr", "(II)V", (void *) netty5_epoll_linuxsocket_setIpRecvOrigDestAddr },
@@ -785,6 +815,7 @@ static const JNINativeMethod fixed_method_table[] = {
   { "getTcpKeepIntvl", "(I)I", (void *) netty5_epoll_linuxsocket_getTcpKeepIntvl },
   { "getTcpKeepCnt", "(I)I", (void *) netty5_epoll_linuxsocket_getTcpKeepCnt },
   { "getTcpUserTimeout", "(I)I", (void *) netty5_epoll_linuxsocket_getTcpUserTimeout },
+  { "isIpBindAddressNoPort", "(I)I", (void *) netty5_epoll_linuxsocket_isIpBindAddressNoPort },
   { "isIpFreeBind", "(I)I", (void *) netty5_epoll_linuxsocket_isIpFreeBind },
   { "isIpTransparent", "(I)I", (void *) netty5_epoll_linuxsocket_isIpTransparent },
   { "isIpRecvOrigDestAddr", "(I)I", (void *) netty5_epoll_linuxsocket_isIpRecvOrigDestAddr },
@@ -846,6 +877,7 @@ jint netty5_epoll_linuxsocket_JNI_OnLoad(JNIEnv* env, const char* packagePrefix)
     jclass fileRegionCls = NULL;
     jclass fileChannelCls = NULL;
     jclass fileDescriptorCls = NULL;
+    jclass peerCredentialsClass = NULL;
     // Register the methods which are not referenced by static member variables
     JNINativeMethod* dynamicMethods = createDynamicMethodsTable(packagePrefix);
     if (dynamicMethods == NULL) {
@@ -860,7 +892,9 @@ jint netty5_epoll_linuxsocket_JNI_OnLoad(JNIEnv* env, const char* packagePrefix)
     }
 
     NETTY_JNI_UTIL_PREPEND(packagePrefix, "io/netty5/channel/unix/PeerCredentials", nettyClassName, done);
-    NETTY_JNI_UTIL_LOAD_CLASS(env, peerCredentialsClass, nettyClassName, done);
+    NETTY_JNI_UTIL_LOAD_CLASS_WEAK(env, peerCredentialsClassWeak, nettyClassName, done);
+    NETTY_JNI_UTIL_NEW_LOCAL_FROM_WEAK(env, peerCredentialsClass, peerCredentialsClassWeak, done);
+
     netty_jni_util_free_dynamic_name(&nettyClassName);
 
     NETTY_JNI_UTIL_GET_METHOD(env, peerCredentialsClass, peerCredentialsMethodId, "<init>", "(II[I)V", done);
@@ -886,11 +920,12 @@ done:
     netty_jni_util_free_dynamic_methods_table(dynamicMethods, fixed_method_table_size, dynamicMethodsTableSize());
     free(nettyClassName);
 
+    NETTY_JNI_UTIL_DELETE_LOCAL(env, peerCredentialsClass);
     return ret;
 }
 
 void netty5_epoll_linuxsocket_JNI_OnUnLoad(JNIEnv* env, const char* packagePrefix) {
-    NETTY_JNI_UTIL_UNLOAD_CLASS(env, peerCredentialsClass);
+    NETTY_JNI_UTIL_UNLOAD_CLASS_WEAK(env, peerCredentialsClassWeak);
 
     netty_jni_util_unregister_natives(env, packagePrefix, LINUXSOCKET_CLASSNAME);
 }

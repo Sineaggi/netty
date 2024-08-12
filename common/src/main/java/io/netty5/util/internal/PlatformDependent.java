@@ -15,9 +15,11 @@
  */
 package io.netty5.util.internal;
 
+import org.jctools.queues.MpmcArrayQueue;
 import org.jctools.queues.MpscArrayQueue;
 import org.jctools.queues.MpscChunkedArrayQueue;
 import org.jctools.queues.MpscUnboundedArrayQueue;
+import org.jctools.queues.atomic.MpmcAtomicArrayQueue;
 import org.jctools.queues.atomic.MpscAtomicArrayQueue;
 import org.jctools.queues.atomic.MpscChunkedAtomicArrayQueue;
 import org.jctools.queues.atomic.MpscUnboundedAtomicArrayQueue;
@@ -77,8 +79,7 @@ public final class PlatformDependent {
 
     private static final Logger logger = LoggerFactory.getLogger(PlatformDependent.class);
 
-    private static final Pattern MAX_DIRECT_MEMORY_SIZE_ARG_PATTERN = Pattern.compile(
-            "\\s*-XX:MaxDirectMemorySize\\s*=\\s*([0-9]+)\\s*([kKmMgG]?)\\s*$");
+    private static Pattern MAX_DIRECT_MEMORY_SIZE_ARG_PATTERN;
 
     private static final boolean MAYBE_SUPER_USER;
 
@@ -812,6 +813,17 @@ public final class PlatformDependent {
     }
 
     /**
+     * Get the ID of the given thread. This is {@code Thread.threadId()} on Java 19 and newer,
+     * or {@code Thread.getId()} on older Java versions.
+     *
+     * @param thread The thread to get the ID from.
+     * @return The ID of the given thread.
+     */
+    public static long threadId(Thread thread) {
+        return PlatformDependent0.threadId(thread);
+    }
+
+    /**
      * Compare two {@code byte} arrays for equality. For performance reasons no bounds checking on the
      * parameters is performed.
      *
@@ -933,8 +945,8 @@ public final class PlatformDependent {
         return hash;
     }
 
-    private static final class Mpsc {
-        private static final boolean USE_MPSC_CHUNKED_ARRAY_QUEUE;
+    private static final class QueueChoice {
+        private static final boolean USE_CHUNKED_ARRAY_QUEUES;
 
         static {
             Object unsafe = null;
@@ -950,10 +962,10 @@ public final class PlatformDependent {
 
             if (unsafe == null) {
                 logger.debug("org.jctools-core.MpscChunkedArrayQueue: unavailable");
-                USE_MPSC_CHUNKED_ARRAY_QUEUE = false;
+                USE_CHUNKED_ARRAY_QUEUES = false;
             } else {
                 logger.debug("org.jctools-core.MpscChunkedArrayQueue: available");
-                USE_MPSC_CHUNKED_ARRAY_QUEUE = true;
+                USE_CHUNKED_ARRAY_QUEUES = true;
             }
         }
 
@@ -966,13 +978,27 @@ public final class PlatformDependent {
         }
 
         static <T> Queue<T> newChunkedMpscQueue(final int chunkSize, final int capacity) {
-            return USE_MPSC_CHUNKED_ARRAY_QUEUE ? new MpscChunkedArrayQueue<>(chunkSize, capacity)
-                    : new MpscChunkedAtomicArrayQueue<>(chunkSize, capacity);
+            return USE_CHUNKED_ARRAY_QUEUES ?
+                    new MpscChunkedArrayQueue<>(chunkSize, capacity) :
+                    new MpscChunkedAtomicArrayQueue<>(chunkSize, capacity);
+        }
+
+        static <T> Queue<T> newMpmcQueue(final int capacity) {
+            return hasUnsafe() ? new MpmcArrayQueue<>(capacity) : new MpmcAtomicArrayQueue<>(capacity);
         }
 
         static <T> Queue<T> newMpscQueue() {
-            return USE_MPSC_CHUNKED_ARRAY_QUEUE ? new MpscUnboundedArrayQueue<>(MPSC_CHUNK_SIZE)
-                                                : new MpscUnboundedAtomicArrayQueue<>(MPSC_CHUNK_SIZE);
+            return USE_CHUNKED_ARRAY_QUEUES ?
+                    new MpscUnboundedArrayQueue<>(MPSC_CHUNK_SIZE) :
+                    new MpscUnboundedAtomicArrayQueue<>(MPSC_CHUNK_SIZE);
+        }
+
+        static <T> Queue<T> newSpscQueue() {
+            return hasUnsafe() ? new SpscLinkedUnpaddedQueue<>() : new SpscLinkedAtomicQueue<>();
+        }
+
+        static <T> Queue<T> newFixedMpscQueue(int capacity) {
+            return hasUnsafe() ? new MpscArrayQueue<>(capacity) : new MpscAtomicArrayQueue<>(capacity);
         }
     }
 
@@ -982,7 +1008,7 @@ public final class PlatformDependent {
      * @return A MPSC queue which may be unbounded.
      */
     public static <T> Queue<T> newMpscQueue() {
-        return Mpsc.newMpscQueue();
+        return QueueChoice.newMpscQueue();
     }
 
     /**
@@ -990,7 +1016,7 @@ public final class PlatformDependent {
      * consumer (one thread!).
      */
     public static <T> Queue<T> newMpscQueue(final int maxCapacity) {
-        return Mpsc.newMpscQueue(maxCapacity);
+        return QueueChoice.newMpscQueue(maxCapacity);
     }
 
     /**
@@ -999,7 +1025,14 @@ public final class PlatformDependent {
      * The queue will grow and shrink its capacity in units of the given chunk size.
      */
     public static <T> Queue<T> newMpscQueue(final int chunkSize, final int maxCapacity) {
-        return Mpsc.newChunkedMpscQueue(chunkSize, maxCapacity);
+        return QueueChoice.newChunkedMpscQueue(chunkSize, maxCapacity);
+    }
+
+    /**
+     * Create a multi-producer, multi-consumer queue with the given capacity.
+     */
+    public static <T> Queue<T> newMpmcQueue(final int capacity) {
+        return QueueChoice.newMpmcQueue(capacity);
     }
 
     /**
@@ -1007,7 +1040,7 @@ public final class PlatformDependent {
      * consumer (one thread!).
      */
     public static <T> Queue<T> newSpscQueue() {
-        return hasUnsafe() ? new SpscLinkedUnpaddedQueue<>() : new SpscLinkedAtomicQueue<>();
+        return QueueChoice.newSpscQueue();
     }
 
     /**
@@ -1015,7 +1048,7 @@ public final class PlatformDependent {
      * consumer (one thread!) with the given fixes {@code capacity}.
      */
     public static <T> Queue<T> newFixedMpscQueue(int capacity) {
-        return hasUnsafe() ? new MpscArrayQueue<>(capacity) : new MpscAtomicArrayQueue<>(capacity);
+        return QueueChoice.newFixedMpscQueue(capacity);
     }
 
     /**
@@ -1134,6 +1167,16 @@ public final class PlatformDependent {
         return vmName.equals("IKVM.NET");
     }
 
+    private static Pattern getMaxDirectMemorySizeArgPattern() {
+        // Pattern's is immutable so it's always safe published
+        Pattern pattern = MAX_DIRECT_MEMORY_SIZE_ARG_PATTERN;
+        if (pattern == null) {
+            pattern = Pattern.compile("\\s*-XX:MaxDirectMemorySize\\s*=\\s*([0-9]+)\\s*([kKmMgG]?)\\s*$");
+            MAX_DIRECT_MEMORY_SIZE_ARG_PATTERN =  pattern;
+        }
+        return pattern;
+    }
+
     /**
      * Compute an estimate of the maximum amount of direct memory available to this JVM.
      * <p>
@@ -1144,7 +1187,10 @@ public final class PlatformDependent {
      * @return The estimated max direct memory, in bytes.
      */
     public static long estimateMaxDirectMemory() {
-        long maxDirectMemory = 0;
+        long maxDirectMemory = PlatformDependent0.bitsMaxDirectMemory();
+        if (maxDirectMemory > 0) {
+            return maxDirectMemory;
+        }
 
         ClassLoader systemClassLoader = null;
         try {
@@ -1183,8 +1229,11 @@ public final class PlatformDependent {
 
             @SuppressWarnings("unchecked")
             List<String> vmArgs = (List<String>) runtimeClass.getDeclaredMethod("getInputArguments").invoke(runtime);
+
+            Pattern maxDirectMemorySizeArgPattern = getMaxDirectMemorySizeArgPattern();
+
             for (int i = vmArgs.size() - 1; i >= 0; i --) {
-                Matcher m = MAX_DIRECT_MEMORY_SIZE_ARG_PATTERN.matcher(vmArgs.get(i));
+                Matcher m = maxDirectMemorySizeArgPattern.matcher(vmArgs.get(i));
                 if (!m.matches()) {
                     continue;
                 }

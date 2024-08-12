@@ -17,7 +17,7 @@ package io.netty5.handler.codec.http2;
 import io.netty5.buffer.Buffer;
 import io.netty5.channel.EventLoopGroup;
 import io.netty5.channel.MultithreadEventLoopGroup;
-import io.netty5.channel.local.LocalHandler;
+import io.netty5.channel.local.LocalIoHandler;
 import io.netty5.handler.codec.http2.Http2Connection.Endpoint;
 import io.netty5.handler.codec.http2.Http2Stream.State;
 import io.netty5.util.concurrent.Promise;
@@ -35,7 +35,6 @@ import org.mockito.stubbing.Answer;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import static io.netty5.buffer.DefaultBufferAllocators.onHeapAllocator;
 import static io.netty5.handler.codec.http2.Http2TestUtil.empty;
 import static java.lang.Integer.MAX_VALUE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -69,7 +68,7 @@ public class DefaultHttp2ConnectionTest {
 
     @BeforeAll
     public static void beforeClass() {
-        group = new MultithreadEventLoopGroup(2, LocalHandler.newFactory());
+        group = new MultithreadEventLoopGroup(2, LocalIoHandler.newFactory());
     }
 
     @AfterAll
@@ -561,7 +560,7 @@ public class DefaultHttp2ConnectionTest {
     public void listenerThrowShouldNotPreventOtherListenersFromBeingNotified() throws Http2Exception {
         final boolean[] calledArray = new boolean[128];
         // The following setup will ensure that clientListener throws exceptions, and marks a value in an array
-        // such that clientListener2 will verify that is is set or fail the test.
+        // such that clientListener2 will verify that is set or fail the test.
         int methodIndex = 0;
         doAnswer(new ListenerExceptionThrower(calledArray, methodIndex))
             .when(clientListener).onStreamAdded(any(Http2Stream.class));
@@ -642,6 +641,32 @@ public class DefaultHttp2ConnectionTest {
         } finally {
             client.removeListener(clientListener2);
         }
+    }
+
+    @Test
+    public void clientLastStreamCreatedWithoutStreamCreated() {
+        assertEquals(0, client.local().lastStreamCreated());
+    }
+
+    @Test
+    public void serverLastStreamCreatedWithoutStreamCreated() {
+        assertEquals(0, server.local().lastStreamCreated());
+    }
+
+    @Test
+    public void clientCreateMaxStreamId() throws Exception {
+        int id = MAX_VALUE;
+        client.local().createStream(id, false);
+        assertTrue(client.streamMayHaveExisted(id));
+        assertEquals(id, client.local().lastStreamCreated());
+    }
+
+    @Test
+    public void serverCreateMaxStreamId() throws Exception {
+        int id = MAX_VALUE - 1;
+        server.local().createStream(id, false);
+        assertTrue(server.streamMayHaveExisted(id));
+        assertEquals(id, server.local().lastStreamCreated());
     }
 
     private void testRemoveAllStreams() throws InterruptedException {

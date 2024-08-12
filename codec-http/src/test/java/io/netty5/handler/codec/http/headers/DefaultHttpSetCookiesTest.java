@@ -132,21 +132,21 @@ class DefaultHttpSetCookiesTest {
         HttpSetCookie next = cookieItr.next();
         assertTrue(areSetCookiesEqual(new TestSetCookie(
                 "foo", "12345", "/", "somecompany.co.uk", null, null, SameSite.Lax, false, false, true), next));
-        assertThat(next.encoded()).containsIgnoringCase("samesite=lax");
+        assertThat(next.encodedSetCookie()).containsIgnoringCase("samesite=lax");
         assertFalse(cookieItr.hasNext());
         cookieItr = headers.getSetCookiesIterator("bar");
         assertTrue(cookieItr.hasNext());
         next = cookieItr.next();
         assertTrue(areSetCookiesEqual(new TestSetCookie("bar", "abcd", "/2", "somecompany.co.uk", null,
                 3000L, SameSite.None, false, false, false), next));
-        assertThat(next.encoded()).containsIgnoringCase("samesite=none");
+        assertThat(next.encodedSetCookie()).containsIgnoringCase("samesite=none");
         assertFalse(cookieItr.hasNext());
         cookieItr = headers.getSetCookiesIterator("baz");
         assertTrue(cookieItr.hasNext());
         next = cookieItr.next();
         assertTrue(areSetCookiesEqual(new TestSetCookie("baz", "xyz", "/3", "somecompany.co.uk", null,
                 null, SameSite.Strict, false, true, false), next));
-        assertThat(next.encoded()).containsIgnoringCase("samesite=strict");
+        assertThat(next.encodedSetCookie()).containsIgnoringCase("samesite=strict");
         assertFalse(cookieItr.hasNext());
     }
 
@@ -790,7 +790,8 @@ class DefaultHttpSetCookiesTest {
                 cookie1.sameSite() == cookie2.sameSite() &&
                 cookie1.isHttpOnly() == cookie2.isHttpOnly() &&
                 cookie1.isSecure() == cookie2.isSecure() &&
-                cookie1.isWrapped() == cookie2.isWrapped();
+                cookie1.isWrapped() == cookie2.isWrapped() &&
+                cookie1.isPartitioned() == cookie2.isPartitioned();
     }
 
     private static boolean areCookiesEqual(final HttpCookiePair cookie1, final HttpCookiePair cookie2) {
@@ -888,9 +889,20 @@ class DefaultHttpSetCookiesTest {
         }
 
         @Override
-        public CharSequence encoded() {
+        public boolean isPartitioned() {
+            return false;
+        }
+
+        @Override
+        public CharSequence encodedCookie() {
             return new DefaultHttpSetCookie(name, value, path, domain, expires, maxAge, sameSite, isWrapped, isSecure,
-                    isHttpOnly).encoded();
+                    isHttpOnly).encodedCookie();
+        }
+
+        @Override
+        public CharSequence encodedSetCookie() {
+            return new DefaultHttpSetCookie(name, value, path, domain, expires, maxAge, sameSite, isWrapped, isSecure,
+                    isHttpOnly).encodedSetCookie();
         }
 
         @Override

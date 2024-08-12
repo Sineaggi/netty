@@ -23,12 +23,13 @@ import io.netty5.handler.codec.http.headers.HttpHeaders;
 import io.netty5.util.AsciiString;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 
 import static io.netty5.handler.codec.http.HttpHeaderNames.HOST;
-import static io.netty5.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_HEADER_SIZE;
-import static io.netty5.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_INITIAL_LINE_LENGTH;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -76,7 +77,7 @@ public class HttpRequestDecoderTest {
     }
 
     void setUpNoValidation() {
-        setUpDecoder(new HttpRequestDecoder(DEFAULT_MAX_INITIAL_LINE_LENGTH, DEFAULT_MAX_HEADER_SIZE, false));
+        setUpDecoder(new HttpRequestDecoder(new HttpDecoderConfig().setValidateHeaders(false)));
     }
 
     void setUpDecoder(HttpRequestDecoder decoder) {
@@ -374,6 +375,20 @@ public class HttpRequestDecoderTest {
     }
 
     @Test
+    public void testStatusWithoutReasonPhrase() {
+        String responseStr = "HTTP/1.1 200 \r\n" +
+                "Content-Length: 0\r\n\r\n";
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpResponseDecoder());
+        assertTrue(channel.writeInbound(allocator.copyOf(responseStr, StandardCharsets.US_ASCII)));
+        HttpResponse response = channel.readInbound();
+        assertTrue(response.decoderResult().isSuccess());
+        assertEquals(HttpResponseStatus.OK, response.status());
+        HttpContent c = channel.readInbound();
+        c.close();
+        assertFalse(channel.finish());
+    }
+
+    @Test
     public void testHeaderNameStartsWithControlChar1c() {
         testHeaderNameStartsWithControlChar(0x1c);
     }
@@ -545,6 +560,30 @@ public class HttpRequestDecoderTest {
                             (extraLine? "0\r\n\r\n" : "") +
                             "something\r\n\r\n";
         testInvalidHeaders0(requestStr);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "HTP/1.1", "HTTP", "HTTP/1x", "Something/1.1", "HTTP/1",
+            "HTTP/1.11", "HTTP/11.1", "HTTP/A.1", "HTTP/1.B"})
+    public void testInvalidVersion(String version) {
+        testInvalidHeaders0("GET / " + version + "\r\nHost: whatever\r\n\r\n");
+    }
+
+    @ParameterizedTest
+    // See https://www.unicode.org/charts/nameslist/n_0000.html
+    @ValueSource(strings = { "\r", "\u000b", "\u000c" })
+    public void testHeaderValueWithInvalidSuffix(String suffix) {
+        testInvalidHeaders0("GET / HTTP/1.1\r\nHost: whatever\r\nTest-Key: test-value" + suffix + "\r\n\r\n");
+    }
+
+    @Test
+    public void testLeadingWhitespaceInFirstHeaderName() {
+        testInvalidHeaders0("POST / HTTP/1.1\r\n\tContent-Length: 1\r\n\r\nX");
+    }
+
+    @Test
+    public void testNulInInitialLine() {
+        testInvalidHeaders0("GET / HTTP/1.1\r\u0000\nHost: whatever\r\n\r\n");
     }
 
     private void testInvalidHeaders0(String request) {

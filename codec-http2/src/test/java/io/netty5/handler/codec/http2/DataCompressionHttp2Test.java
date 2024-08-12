@@ -23,7 +23,7 @@ import io.netty5.channel.ChannelHandlerContext;
 import io.netty5.channel.ChannelInitializer;
 import io.netty5.channel.ChannelPipeline;
 import io.netty5.channel.MultithreadEventLoopGroup;
-import io.netty5.channel.nio.NioHandler;
+import io.netty5.channel.nio.NioIoHandler;
 import io.netty5.channel.socket.nio.NioServerSocketChannel;
 import io.netty5.channel.socket.nio.NioSocketChannel;
 import io.netty5.handler.codec.http.HttpHeaderNames;
@@ -270,6 +270,40 @@ public class DataCompressionHttp2Test {
     }
 
     @Test
+    public void snappyEncodingSingleEmptyMessage() throws Exception {
+        final String text = "";
+        final Buffer data = bb(text);
+        bootstrapEnv(data.readableBytes());
+        final Http2Headers headers = Http2Headers.newHeaders().method(POST).path(PATH)
+                .set(HttpHeaderNames.CONTENT_ENCODING, HttpHeaderValues.SNAPPY);
+
+        runInChannel(clientChannel, () -> {
+            clientEncoder.writeHeaders(ctxClient(), 3, headers, 0, false);
+            clientEncoder.writeData(ctxClient(), 3, data, 0, true);
+            clientHandler.flush(ctxClient());
+        });
+        awaitServer();
+        assertEquals(text, serverOut.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void snappyEncodingSingleMessage() throws Exception {
+        final String text = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbccccccccccccccccccccccc";
+        final Buffer data = bb(text);
+        bootstrapEnv(data.readableBytes());
+        final Http2Headers headers = Http2Headers.newHeaders().method(POST).path(PATH)
+                .set(HttpHeaderNames.CONTENT_ENCODING, HttpHeaderValues.SNAPPY);
+
+        runInChannel(clientChannel, () -> {
+            clientEncoder.writeHeaders(ctxClient(), 3, headers, 0, false);
+            clientEncoder.writeData(ctxClient(), 3, data, 0, true);
+            clientHandler.flush(ctxClient());
+        });
+        awaitServer();
+        assertEquals(text, serverOut.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
     public void deflateEncodingWriteLargeMessage() throws Exception {
         final int BUFFER_SIZE = 1 << 12;
         final byte[] bytes = new byte[BUFFER_SIZE];
@@ -328,8 +362,8 @@ public class DataCompressionHttp2Test {
                 any(Buffer.class), anyInt(), anyBoolean());
 
         final CountDownLatch serverChannelLatch = new CountDownLatch(1);
-        sb.group(new MultithreadEventLoopGroup(NioHandler.newFactory()),
-                new MultithreadEventLoopGroup(NioHandler.newFactory()));
+        sb.group(new MultithreadEventLoopGroup(NioIoHandler.newFactory()),
+                new MultithreadEventLoopGroup(NioIoHandler.newFactory()));
         sb.channel(NioServerSocketChannel.class);
         sb.childHandler(new ChannelInitializer<Channel>() {
             @Override
@@ -353,7 +387,7 @@ public class DataCompressionHttp2Test {
             }
         });
 
-        cb.group(new MultithreadEventLoopGroup(NioHandler.newFactory()));
+        cb.group(new MultithreadEventLoopGroup(NioIoHandler.newFactory()));
         cb.channel(NioSocketChannel.class);
         cb.handler(new ChannelInitializer<Channel>() {
             @Override

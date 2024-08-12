@@ -41,8 +41,6 @@ import static io.netty5.channel.unix.Errors.newIOException;
  */
 @UnstableApi
 public final class LinuxSocket extends Socket {
-    static final InetAddress INET6_ANY = unsafeInetAddrByName("::");
-    private static final InetAddress INET_ANY = unsafeInetAddrByName("0.0.0.0");
     private static final long MAX_UINT32_T = 0xFFFFFFFFL;
 
     LinuxSocket(int fd, SocketProtocolFamily family) {
@@ -74,7 +72,7 @@ public final class LinuxSocket extends Socket {
 
     void setNetworkInterface(NetworkInterface netInterface) throws IOException {
         InetAddress address = deriveInetAddress(netInterface, protocolFamily() == SocketProtocolFamily.INET6);
-        if (address.equals(protocolFamily() == SocketProtocolFamily.INET ? INET_ANY : INET6_ANY)) {
+        if (address.equals(protocolFamily() == SocketProtocolFamily.INET ? Native.INET_ANY : Native.INET6_ANY)) {
             throw new IOException("NetworkInterface does not support " + protocolFamily());
         }
         final NativeInetAddress nativeAddress = NativeInetAddress.newInstance(address);
@@ -203,6 +201,10 @@ public final class LinuxSocket extends Socket {
         setTcpUserTimeout(intValue(), milliseconds);
     }
 
+    void setIpBindAddressNoPort(boolean enabled) throws IOException {
+        setIpBindAddressNoPort(intValue(), enabled ? 1 : 0);
+    }
+
     void setIpFreeBind(boolean enabled) throws IOException {
         setIpFreeBind(intValue(), enabled ? 1 : 0);
     }
@@ -262,6 +264,10 @@ public final class LinuxSocket extends Socket {
 
     int getTcpUserTimeout() throws IOException {
         return getTcpUserTimeout(intValue());
+    }
+
+    boolean isIpBindAddressNoPort() throws IOException {
+        return isIpBindAddressNoPort(intValue()) != 0;
     }
 
     boolean isIpFreeBind() throws IOException {
@@ -349,7 +355,7 @@ public final class LinuxSocket extends Socket {
     }
 
     private static InetAddress deriveInetAddress(NetworkInterface netInterface, boolean ipv6) {
-        final InetAddress ipAny = ipv6 ? INET6_ANY : INET_ANY;
+        final InetAddress ipAny = ipv6 ? Native.INET6_ANY : Native.INET_ANY;
         if (netInterface != null) {
             final Enumeration<InetAddress> ias = netInterface.getInetAddresses();
             while (ias.hasMoreElements()) {
@@ -444,14 +450,6 @@ public final class LinuxSocket extends Socket {
         return new LinuxSocket(newSocketDomainDgram0(), SocketProtocolFamily.UNIX);
     }
 
-    private static InetAddress unsafeInetAddrByName(String inetName) {
-        try {
-            return InetAddress.getByName(inetName);
-        } catch (UnknownHostException uhe) {
-            throw new ChannelException(uhe);
-        }
-    }
-
     private static native int newVSockStreamFd();
     private static native int bindVSock(int fd, int cid, int port);
     private static native int connectVSock(int fd, int cid, int port);
@@ -479,6 +477,7 @@ public final class LinuxSocket extends Socket {
     private static native int getTcpKeepCnt(int fd) throws IOException;
     private static native int getTcpUserTimeout(int fd) throws IOException;
     private static native int getTimeToLive(int fd) throws IOException;
+    private static native int isIpBindAddressNoPort(int fd) throws IOException;
     private static native int isIpFreeBind(int fd) throws IOException;
     private static native int isIpTransparent(int fd) throws IOException;
     private static native int isIpRecvOrigDestAddr(int fd) throws IOException;
@@ -495,6 +494,7 @@ public final class LinuxSocket extends Socket {
     private static native void setTcpKeepIntvl(int fd, int seconds) throws IOException;
     private static native void setTcpKeepCnt(int fd, int probes) throws IOException;
     private static native void setTcpUserTimeout(int fd, int milliseconds)throws IOException;
+    private static native void setIpBindAddressNoPort(int fd, int ipBindAddressNoPort) throws IOException;
     private static native void setIpFreeBind(int fd, int freeBind) throws IOException;
     private static native void setIpTransparent(int fd, int transparent) throws IOException;
     private static native void setIpRecvOrigDestAddr(int fd, int transparent) throws IOException;

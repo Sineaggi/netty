@@ -20,6 +20,7 @@ import io.netty5.channel.embedded.EmbeddedChannel;
 import io.netty5.handler.codec.compression.Brotli;
 import io.netty5.handler.codec.compression.BrotliDecompressor;
 import io.netty5.handler.codec.compression.Decompressor;
+import io.netty5.handler.codec.compression.SnappyDecompressor;
 import io.netty5.handler.codec.compression.ZlibDecompressor;
 import io.netty5.handler.codec.compression.ZlibWrapper;
 import io.netty5.handler.codec.http2.headers.Http2Headers;
@@ -31,6 +32,7 @@ import static io.netty5.handler.codec.http.HttpHeaderValues.BR;
 import static io.netty5.handler.codec.http.HttpHeaderValues.DEFLATE;
 import static io.netty5.handler.codec.http.HttpHeaderValues.GZIP;
 import static io.netty5.handler.codec.http.HttpHeaderValues.IDENTITY;
+import static io.netty5.handler.codec.http.HttpHeaderValues.SNAPPY;
 import static io.netty5.handler.codec.http.HttpHeaderValues.X_DEFLATE;
 import static io.netty5.handler.codec.http.HttpHeaderValues.X_GZIP;
 import static io.netty5.handler.codec.http2.Http2Error.INTERNAL_ERROR;
@@ -101,14 +103,7 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
                 }
                 int idx = data.readerOffset();
                 decompressed = decomp.decompress(data, ctx.bufferAllocator());
-                if (decompressed == null || idx == data.readerOffset()) {
-                    try (Buffer empty = ctx.bufferAllocator().allocate(0)) {
-                        // The ownership is not transferred to "Http2FrameListener.onDataRead"
-                        int bytes = listener.onDataRead(ctx, streamId, empty, padding, endOfStream);
-                        flowController.consumeBytes(stream, bytes);
-                    }
-                    break;
-                } else {
+                if (decompressed != null) {
                     // Immediately return the bytes back to the flow controller. ConsumedBytesConverter will convert
                     // from the decompressed amount which the user knows about to the compressed amount which flow
                     // control knows about.
@@ -117,6 +112,13 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
                             listener.onDataRead(ctx, streamId, decompressed, padding, false));
                     decompressed.close();
                     decompressed = null;
+                } else if (idx == data.readerOffset()) {
+                    try (Buffer empty = ctx.bufferAllocator().allocate(0)) {
+                        // The ownership is not transferred to "Http2FrameListener.onDataRead"
+                        int bytes = listener.onDataRead(ctx, streamId, empty, padding, endOfStream);
+                        flowController.consumeBytes(stream, bytes);
+                    }
+                    break;
                 }
                 padding = 0; // Padding is only communicated once on the first iteration.
             }
@@ -171,6 +173,9 @@ public class DelegatingDecompressorFrameListener extends Http2FrameListenerDecor
         }
         if (Brotli.isAvailable() && BR.contentEqualsIgnoreCase(contentEncoding)) {
             return BrotliDecompressor.newFactory().get();
+        }
+        if (SNAPPY.contentEqualsIgnoreCase(contentEncoding)) {
+            return SnappyDecompressor.newFactory().get();
         }
         // 'identity' or unsupported
         return null;

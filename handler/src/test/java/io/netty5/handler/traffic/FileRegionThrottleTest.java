@@ -25,13 +25,13 @@ import io.netty5.channel.ChannelInitializer;
 import io.netty5.channel.DefaultFileRegion;
 import io.netty5.channel.EventLoopGroup;
 import io.netty5.channel.MultithreadEventLoopGroup;
-import io.netty5.channel.nio.NioHandler;
+import io.netty5.channel.nio.NioIoHandler;
 import io.netty5.channel.socket.SocketChannel;
 import io.netty5.channel.socket.nio.NioServerSocketChannel;
 import io.netty5.channel.socket.nio.NioSocketChannel;
 import io.netty5.handler.codec.LineBasedFrameDecoder;
 import io.netty5.util.internal.PlatformDependent;
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AutoClose;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
@@ -55,6 +55,7 @@ public class FileRegionThrottleTest {
     private static final byte[] BYTES = new byte[64 * 1024 * 4];
     private static final long WRITE_LIMIT = 64 * 1024;
     private static File tmp;
+    @AutoClose("shutdownGracefully")
     private EventLoopGroup group;
 
     @BeforeAll
@@ -76,12 +77,7 @@ public class FileRegionThrottleTest {
 
     @BeforeEach
     public void setUp() {
-        group = new MultithreadEventLoopGroup(NioHandler.newFactory());
-    }
-
-    @AfterEach
-    public void tearDown() {
-        group.shutdownGracefully();
+        group = new MultithreadEventLoopGroup(NioIoHandler.newFactory());
     }
 
     @Disabled("This test is flaky, need more investigation")

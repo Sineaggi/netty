@@ -41,6 +41,7 @@ import io.netty5.channel.unix.UnixChannelUtil;
 import io.netty5.util.Resource;
 import io.netty5.util.concurrent.Future;
 import io.netty5.util.concurrent.GlobalEventExecutor;
+import io.netty5.util.concurrent.Promise;
 import io.netty5.util.internal.StringUtil;
 
 import java.io.IOException;
@@ -105,6 +106,8 @@ import static java.util.Objects.requireNonNull;
  * </tr><tr>
  * <td>{@link ChannelOption#TCP_FASTOPEN_CONNECT}</td><td>X</td><td>X</td><td>-</td>
  * </tr><tr>
+ * <td>{@link EpollChannelOption#IP_BIND_ADDRESS_NO_PORT}</td><td>X</td><td>X</td><td>-</td>
+ * </tr><tr>
  * <td>{@link EpollChannelOption#IP_TRANSPARENT}</td><td>X</td><td>X</td><td>-</td>
  * </tr><tr>
  * <td>{@link EpollChannelOption#SO_BUSY_POLL}</td><td>X</td><td>X</td><td>-</td>
@@ -140,7 +143,7 @@ public final class EpollSocketChannel
 
     public EpollSocketChannel(EventLoop eventLoop, ProtocolFamily protocolFamily) {
         // Add EPOLLRDHUP so we are notified once the remote peer close the connection.
-        super(null, eventLoop, false, Native.EPOLLRDHUP, new AdaptiveReadHandleFactory(), newWriteHandleFactory(),
+        super(null, eventLoop, false, EpollIoOps.EPOLLRDHUP, new AdaptiveReadHandleFactory(), newWriteHandleFactory(),
                 LinuxSocket.newSocket(protocolFamily), false);
     }
 
@@ -150,14 +153,14 @@ public final class EpollSocketChannel
 
     private EpollSocketChannel(EventLoop eventLoop, LinuxSocket socket) {
         // Add EPOLLRDHUP so we are notified once the remote peer close the connection.
-        super(null, eventLoop, false, Native.EPOLLRDHUP, new AdaptiveReadHandleFactory(), newWriteHandleFactory(),
+        super(null, eventLoop, false, EpollIoOps.EPOLLRDHUP, new AdaptiveReadHandleFactory(), newWriteHandleFactory(),
                 socket, isSoErrorZero(socket));
     }
 
     EpollSocketChannel(EpollServerSocketChannel parent, EventLoop eventLoop,
                        LinuxSocket fd, SocketAddress remoteAddress) {
         // Add EPOLLRDHUP so we are notified once the remote peer close the connection.
-        super(parent, eventLoop, false, Native.EPOLLRDHUP, new AdaptiveReadHandleFactory(), newWriteHandleFactory(),
+        super(parent, eventLoop, false, EpollIoOps.EPOLLRDHUP, new AdaptiveReadHandleFactory(), newWriteHandleFactory(),
                 fd, remoteAddress);
 
         if (fd.protocolFamily() != SocketProtocolFamily.UNIX && parent != null) {
@@ -335,7 +338,7 @@ public final class EpollSocketChannel
      * @throws Exception If an I/O error occurs.
      */
     private void doWriteMultiple(WriteSink writeSink) throws Exception {
-        IovArray array = registration().cleanIovArray();
+        IovArray array = registration().ioHandler().cleanIovArray();
         array.maxBytes(writeSink.estimatedMaxBytesPerGatheringWrite());
         writeSink.forEachFlushedMessage(array);
 
@@ -517,6 +520,9 @@ public final class EpollSocketChannel
             if (option == EpollChannelOption.TCP_QUICKACK) {
                 return (T) Boolean.valueOf(isTcpQuickAck());
             }
+            if (option == EpollChannelOption.IP_BIND_ADDRESS_NO_PORT) {
+                return (T) Boolean.valueOf(isIpBindAddressNoPort());
+            }
             if (option == EpollChannelOption.IP_TRANSPARENT) {
                 return (T) Boolean.valueOf(isIpTransparent());
             }
@@ -569,6 +575,8 @@ public final class EpollSocketChannel
                 setTcpKeepIntvl((Integer) value);
             } else if (option == EpollChannelOption.TCP_USER_TIMEOUT) {
                 setTcpUserTimeout((Integer) value);
+            } else if (option == EpollChannelOption.IP_BIND_ADDRESS_NO_PORT) {
+                setIpBindAddressNoPort((Boolean) value);
             } else if (option == EpollChannelOption.IP_TRANSPARENT) {
                 setIpTransparent((Boolean) value);
             } else if (option == EpollChannelOption.TCP_MD5SIG) {
@@ -609,9 +617,9 @@ public final class EpollSocketChannel
         return newSupportedIdentityOptionsSet(SO_RCVBUF, SO_SNDBUF, TCP_NODELAY, SO_KEEPALIVE, SO_REUSEADDR, SO_LINGER,
                 IP_TOS, EpollChannelOption.TCP_CORK, EpollChannelOption.TCP_KEEPIDLE, EpollChannelOption.TCP_KEEPCNT,
                 EpollChannelOption.TCP_KEEPINTVL, EpollChannelOption.TCP_USER_TIMEOUT,
-                EpollChannelOption.IP_TRANSPARENT, EpollChannelOption.TCP_MD5SIG, EpollChannelOption.TCP_QUICKACK,
-                ChannelOption.TCP_FASTOPEN_CONNECT, EpollChannelOption.SO_BUSY_POLL,
-                EpollChannelOption.TCP_NOTSENT_LOWAT, EpollChannelOption.TCP_INFO);
+                EpollChannelOption.IP_BIND_ADDRESS_NO_PORT, EpollChannelOption.IP_TRANSPARENT,
+                EpollChannelOption.TCP_MD5SIG, EpollChannelOption.TCP_QUICKACK, ChannelOption.TCP_FASTOPEN_CONNECT,
+                EpollChannelOption.SO_BUSY_POLL, EpollChannelOption.TCP_NOTSENT_LOWAT, EpollChannelOption.TCP_INFO);
     }
 
     private static Set<ChannelOption<?>> supportedOptionsDomainSocket() {
@@ -888,12 +896,36 @@ public final class EpollSocketChannel
     }
 
     /**
+     * Returns {@code true} if <a href="https://man7.org/linux/man-pages/man7/ip.7.html">IP_BIND_ADDRESS_NO_PORT</a> is
+     * enabled, {@code false} otherwise.
+     */
+    public boolean isIpBindAddressNoPort() {
+        try {
+            return socket.isIpBindAddressNoPort();
+        } catch (IOException e) {
+            throw new ChannelException(e);
+        }
+    }
+
+    /**
      * Returns {@code true} if <a href="https://man7.org/linux/man-pages/man7/ip.7.html">IP_TRANSPARENT</a> is enabled,
      * {@code false} otherwise.
      */
     public boolean isIpTransparent() {
         try {
             return socket.isIpTransparent();
+        } catch (IOException e) {
+            throw new ChannelException(e);
+        }
+    }
+
+    /**
+     * If {@code true} is used <a href="https://man7.org/linux/man-pages/man7/ip.7.html">IP_BIND_ADDRESS_NO_PORT</a> is
+     * enabled, {@code false} for disable it. Default is disabled.
+     */
+    private void setIpBindAddressNoPort(boolean ipBindAddressNoPort) {
+        try {
+            socket.setIpBindAddressNoPort(ipBindAddressNoPort);
         } catch (IOException e) {
             throw new ChannelException(e);
         }
@@ -1007,7 +1039,9 @@ public final class EpollSocketChannel
                     // because we try to read or write until the actual close happens which may be later due
                     // SO_LINGER handling.
                     // See https://github.com/netty/netty/issues/4449
-                    executor().deregisterForIo(this).map(v -> GlobalEventExecutor.INSTANCE);
+                    Promise<Void> promise = newPromise();
+                    deregisterTransport(promise);
+                    return promise.asFuture().map(v -> GlobalEventExecutor.INSTANCE);
                 }
             } catch (Throwable ignore) {
                 // Ignore the error as the underlying channel may be closed in the meantime and so

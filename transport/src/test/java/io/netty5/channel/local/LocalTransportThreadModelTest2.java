@@ -32,30 +32,28 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class LocalTransportThreadModelTest2 {
-
-    private static final String LOCAL_CHANNEL = LocalTransportThreadModelTest2.class.getName();
-
     static final int messageCountPerRun = 4;
 
     @Test
     @Timeout(value = 15000, unit = TimeUnit.MILLISECONDS)
     public void testSocketReuse() throws Exception {
+        LocalAddress address = new LocalAddress(LocalTransportThreadModelTest2.class);
         ServerBootstrap serverBootstrap = new ServerBootstrap();
         LocalHandler serverHandler = new LocalHandler("SERVER");
         serverBootstrap
-                .group(new MultithreadEventLoopGroup(io.netty5.channel.local.LocalHandler.newFactory()),
-                        new MultithreadEventLoopGroup(io.netty5.channel.local.LocalHandler.newFactory()))
+                .group(new MultithreadEventLoopGroup(LocalIoHandler.newFactory()),
+                        new MultithreadEventLoopGroup(LocalIoHandler.newFactory()))
                 .channel(LocalServerChannel.class)
                 .childHandler(serverHandler);
 
         Bootstrap clientBootstrap = new Bootstrap();
         LocalHandler clientHandler = new LocalHandler("CLIENT");
         clientBootstrap
-                .group(new MultithreadEventLoopGroup(io.netty5.channel.local.LocalHandler.newFactory()))
+                .group(new MultithreadEventLoopGroup(LocalIoHandler.newFactory()))
                 .channel(LocalChannel.class)
-                .remoteAddress(new LocalAddress(LOCAL_CHANNEL)).handler(clientHandler);
+                .remoteAddress(address).handler(clientHandler);
 
-        serverBootstrap.bind(new LocalAddress(LOCAL_CHANNEL)).asStage().sync();
+        serverBootstrap.bind(address).asStage().sync();
 
         int count = 100;
         for (int i = 1; i < count + 1; i ++) {

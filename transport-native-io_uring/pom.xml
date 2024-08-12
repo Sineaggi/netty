@@ -43,6 +43,8 @@
     <nativeLibOnlyDir>${project.build.directory}/native-lib-only</nativeLibOnlyDir>
     <extraConfigureArg />
     <extraConfigureArg2 />
+    <!-- Always check JNI during test run so we catch bugs that could cause crashes -->
+    <argLine.jni>-Xcheck:jni</argLine.jni>
     <test.argLine>-D_</test.argLine>
   </properties>
 
@@ -55,7 +57,7 @@
         </os>
       </activation>
       <properties>
-        <skipTests>false</skipTests>
+        <skipTests>true</skipTests>
       </properties>
 
       <build>
@@ -145,6 +147,7 @@
                   <archive>
                     <manifest>
                       <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                      <addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
                     </manifest>
                     <manifestEntries>
                       <Bundle-NativeCode>META-INF/native/libnetty5_transport_native_io_uring_${os.detected.arch}.so; osname=Linux; processor=${os.detected.arch},*</Bundle-NativeCode>
@@ -373,6 +376,7 @@
               <archive>
                 <manifest>
                   <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                  <addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
                 </manifest>
                 <manifestEntries>
                   <Automatic-Module-Name>${javaModuleName}</Automatic-Module-Name>

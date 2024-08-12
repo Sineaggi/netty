@@ -18,11 +18,11 @@ package io.netty5.resolver.dns;
 import io.netty5.channel.EventLoop;
 import io.netty5.channel.EventLoopGroup;
 import io.netty5.channel.MultithreadEventLoopGroup;
-import io.netty5.channel.nio.NioHandler;
+import io.netty5.channel.nio.NioIoHandler;
 import io.netty5.channel.socket.nio.NioDatagramChannel;
 import io.netty5.handler.codec.dns.DnsRecord;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AutoClose;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -34,7 +34,8 @@ import static io.netty5.resolver.dns.Cache.MAX_SUPPORTED_TTL_SECS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DnsNameResolverBuilderTest {
-    private static final EventLoopGroup GROUP = new MultithreadEventLoopGroup(1, NioHandler.newFactory());
+    @AutoClose("shutdownGracefully")
+    private static final EventLoopGroup GROUP = new MultithreadEventLoopGroup(1, NioIoHandler.newFactory());
 
     private DnsNameResolverBuilder builder;
     private DnsNameResolver resolver;
@@ -51,11 +52,6 @@ class DnsNameResolverBuilderTest {
         }
     }
 
-    @AfterAll
-    static void shutdownEventLoopGroup() {
-        GROUP.shutdownGracefully();
-    }
-
     @Test
     void testDefaults() {
         resolver = builder.build();
@@ -66,6 +62,7 @@ class DnsNameResolverBuilderTest {
 
         checkDefaultAuthoritativeDnsServerCache(
                 (DefaultAuthoritativeDnsServerCache) resolver.authoritativeDnsServerCache(), MAX_SUPPORTED_TTL_SECS, 0);
+assertThat(resolver.queryDnsServerAddressStream()).isInstanceOf(ThreadLocalNameServerAddressStream.class);
     }
 
     @Test
@@ -243,6 +240,35 @@ class DnsNameResolverBuilderTest {
         @Override
         public boolean clear(String hostname) {
             return false;
+        }
+    }
+
+    @Test
+    void testCustomQueryDnsServerAddressStream() {
+        DnsServerAddressStream queryAddressStream = new TestQueryServerAddressStream();
+        resolver = builder.queryServerAddressStream(queryAddressStream).build();
+
+        assertThat(resolver.queryDnsServerAddressStream()).isSameAs(queryAddressStream);
+
+        resolver = builder.copy().build();
+        assertThat(resolver.queryDnsServerAddressStream()).isSameAs(queryAddressStream);
+    }
+
+    private static final class TestQueryServerAddressStream implements DnsServerAddressStream {
+
+        @Override
+        public InetSocketAddress next() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int size() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DnsServerAddressStream duplicate() {
+            throw new UnsupportedOperationException();
         }
     }
 }

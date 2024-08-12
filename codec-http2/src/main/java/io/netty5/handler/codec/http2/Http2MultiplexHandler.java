@@ -66,7 +66,7 @@ import static io.netty5.handler.codec.http2.Http2Exception.connectionError;
  * Some {@link Http2StreamFrame}s implement the {@link Resource} interface, as they carry
  * resource objects (e.g. {@link Buffer}s). An application handler needs to close or dispose of
  * such objects after having consumed them.
- *
+
  * <h3>Channel Events</h3>
  *
  * A child channel becomes active as soon as it is registered to an {@link EventLoop}. Therefore, an active channel
@@ -82,6 +82,15 @@ import static io.netty5.handler.codec.http2.Http2Exception.connectionError;
  * window. {@link ChannelHandler}s are free to ignore the channel's writability, in which case the excessive writes will
  * be buffered by the parent channel. It's important to note that only {@link Http2DataFrame}s are subject to
  * HTTP/2 flow control.
+ *
+ * <h3>Closing a {@link Http2StreamChannel}</h3>
+ *
+ * Once you close a {@link Http2StreamChannel} a {@link Http2ResetFrame} will be sent to the remote peer with
+ * {@link Http2Error#CANCEL} if needed. If you want to close the stream with another {@link Http2Error} (due
+ * errors / limits) you should propagate a {@link Http2FrameStreamException} through the {@link ChannelPipeline}.
+ * Once it reaches the end of the {@link ChannelPipeline} it will automatically close the {@link Http2StreamChannel}
+ * and send a {@link Http2ResetFrame} with the unwrapped {@link Http2Error} set. Another possibility is to just
+ * directly write a {@link Http2ResetFrame} to the {@link Http2StreamChannel}l.
  */
 @UnstableApi
 public final class Http2MultiplexHandler extends Http2ChannelDuplexHandler {
@@ -164,10 +173,10 @@ public final class Http2MultiplexHandler extends Http2ChannelDuplexHandler {
                     (DefaultHttp2FrameStream) streamFrame.stream();
 
             DefaultHttp2StreamChannel channel = (DefaultHttp2StreamChannel) s.attachment;
-            if (msg instanceof Http2ResetFrame) {
-                // Reset frames needs to be propagated via user events as these are not flow-controlled and so
-                // must not be controlled by suppressing channel.read() on the child channel.
-                channel.pipeline().fireChannelInboundEvent(msg);
+            if (streamFrame instanceof Http2ResetFrame || streamFrame instanceof Http2PriorityFrame) {
+                // Reset and Priority frames needs to be propagated via user events as these are not flow-controlled and
+                // so must not be controlled by suppressing channel.read() on the child channel.
+                channel.pipeline().fireChannelInboundEvent(streamFrame);
 
                 // RST frames will also trigger closing of the streams which then will call
                 // AbstractHttp2StreamChannel.streamClosed()

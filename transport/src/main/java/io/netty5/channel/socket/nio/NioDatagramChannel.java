@@ -26,6 +26,7 @@ import io.netty5.channel.EventLoop;
 import io.netty5.channel.FixedReadHandleFactory;
 import io.netty5.channel.MaxMessagesWriteHandleFactory;
 import io.netty5.channel.nio.AbstractNioMessageChannel;
+import io.netty5.channel.nio.NioIoOps;
 import io.netty5.channel.socket.DatagramPacket;
 import io.netty5.util.Resource;
 import io.netty5.util.concurrent.Future;
@@ -65,7 +66,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * An NIO {@link io.netty5.channel.socket.DatagramChannel} that sends and receives an
- * {@link AddressedEnvelope AddressedEnvelope<ByteBuf, SocketAddress>}.
+ * {@link AddressedEnvelope AddressedEnvelope<Buffer, SocketAddress>}.
  *
  * <h3>Available options</h3>
  *
@@ -168,7 +169,7 @@ public final class NioDatagramChannel
      */
     public NioDatagramChannel(EventLoop eventLoop, DatagramChannel socket, ProtocolFamily family) {
         super(null, eventLoop, true, new FixedReadHandleFactory(2048),
-                new MaxMessagesWriteHandleFactory(Integer.MAX_VALUE), socket, SelectionKey.OP_READ);
+                new MaxMessagesWriteHandleFactory(Integer.MAX_VALUE), socket, NioIoOps.READ);
         this.family = toJdkFamily(family);
     }
 
@@ -281,11 +282,9 @@ public final class NioDatagramChannel
     }
 
     @Override
-    @SuppressWarnings("deprecation")
     public boolean isActive() {
         DatagramChannel ch = javaChannel();
-        return ch.isOpen() && (getOption(ChannelOption.DATAGRAM_CHANNEL_ACTIVE_ON_REGISTRATION) && isRegistered()
-                || bound);
+        return ch.isOpen() && (getOption(DATAGRAM_CHANNEL_ACTIVE_ON_REGISTRATION) && isRegistered() || bound);
     }
 
     @Override
@@ -393,7 +392,7 @@ public final class NioDatagramChannel
             }
             if (remoteAddress == null) {
                 readSink.processRead(attemptedBytesRead, 0, null);
-                return -1;
+                return 0;
             }
             data.skipWritableBytes(actualBytesRead);
             readSink.processRead(attemptedBytesRead, actualBytesRead,
@@ -468,7 +467,7 @@ public final class NioDatagramChannel
 
     private static void checkUnresolved(AddressedEnvelope<?, ?> envelope) {
         if (envelope.recipient() instanceof InetSocketAddress
-                && (((InetSocketAddress) envelope.recipient()).isUnresolved())) {
+                && ((InetSocketAddress) envelope.recipient()).isUnresolved()) {
             throw new UnresolvedAddressException();
         }
     }

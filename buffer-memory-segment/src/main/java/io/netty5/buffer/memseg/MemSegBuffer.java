@@ -26,6 +26,7 @@ import io.netty5.buffer.Drop;
 import io.netty5.buffer.Owned;
 import io.netty5.buffer.internal.AdaptableBuffer;
 import io.netty5.buffer.internal.InternalBufferUtils;
+import io.netty5.util.internal.SWARUtil;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
@@ -49,25 +50,25 @@ import static io.netty5.util.internal.PlatformDependent.roundToPowerOfTwo;
 class MemSegBuffer extends AdaptableBuffer<MemSegBuffer>
         implements BufferComponent, ComponentIterator<MemSegBuffer>, ComponentIterator.Next {
     private static final ValueLayout.OfByte JAVA_BYTE =
-            ValueLayout.JAVA_BYTE.withOrder(ByteOrder.BIG_ENDIAN).withBitAlignment(Byte.SIZE);
+            ValueLayout.JAVA_BYTE.withOrder(ByteOrder.BIG_ENDIAN).withByteAlignment(Byte.BYTES);
     private static final ValueLayout.OfChar JAVA_CHAR =
-            ValueLayout.JAVA_CHAR.withOrder(ByteOrder.BIG_ENDIAN).withBitAlignment(Byte.SIZE);
+            ValueLayout.JAVA_CHAR.withOrder(ByteOrder.BIG_ENDIAN).withByteAlignment(Byte.BYTES);
     private static final ValueLayout.OfShort JAVA_SHORT =
-            ValueLayout.JAVA_SHORT.withOrder(ByteOrder.BIG_ENDIAN).withBitAlignment(Byte.SIZE);
+            ValueLayout.JAVA_SHORT.withOrder(ByteOrder.BIG_ENDIAN).withByteAlignment(Byte.BYTES);
     private static final ValueLayout.OfInt JAVA_INT =
-            ValueLayout.JAVA_INT.withOrder(ByteOrder.BIG_ENDIAN).withBitAlignment(Byte.SIZE);
+            ValueLayout.JAVA_INT.withOrder(ByteOrder.BIG_ENDIAN).withByteAlignment(Byte.BYTES);
     private static final ValueLayout.OfFloat JAVA_FLOAT =
-            ValueLayout.JAVA_FLOAT.withOrder(ByteOrder.BIG_ENDIAN).withBitAlignment(Byte.SIZE);
+            ValueLayout.JAVA_FLOAT.withOrder(ByteOrder.BIG_ENDIAN).withByteAlignment(Byte.BYTES);
     private static final ValueLayout.OfLong JAVA_LONG =
-            ValueLayout.JAVA_LONG.withOrder(ByteOrder.BIG_ENDIAN).withBitAlignment(Byte.SIZE);
+            ValueLayout.JAVA_LONG.withOrder(ByteOrder.BIG_ENDIAN).withByteAlignment(Byte.BYTES);
     private static final ValueLayout.OfDouble JAVA_DOUBLE =
-            ValueLayout.JAVA_DOUBLE.withOrder(ByteOrder.BIG_ENDIAN).withBitAlignment(Byte.SIZE);
+            ValueLayout.JAVA_DOUBLE.withOrder(ByteOrder.BIG_ENDIAN).withByteAlignment(Byte.BYTES);
 
     private static final MemorySegment CLOSED_SEGMENT;
 
     static {
-        try (Arena arena = Arena.openShared()) {
-            CLOSED_SEGMENT = MemorySegment.allocateNative(0, arena.scope());
+        try (Arena arena = Arena.ofShared()) {
+            CLOSED_SEGMENT = arena.allocate(0);
         }
     }
 
@@ -454,20 +455,14 @@ class MemSegBuffer extends AdaptableBuffer<MemSegBuffer>
         final int end = woff;
 
         if (length > 7) {
-            final long pattern = (needle & 0xFFL) * 0x101010101010101L;
+            final long pattern = SWARUtil.compilePattern(needle);
             for (final int longEnd = offset + (length >>> 3) * Long.BYTES;
                  offset < longEnd;
                  offset += Long.BYTES) {
                 final long word = getLongAtOffset(seg, offset);
-
-                long input = word ^ pattern;
-                long tmp = (input & 0x7F7F7F7F7F7F7F7FL) + 0x7F7F7F7F7F7F7F7FL;
-                tmp = ~(tmp | input | 0x7F7F7F7F7F7F7F7FL);
-                final int binaryPosition = Long.numberOfLeadingZeros(tmp);
-
-                int index = binaryPosition >>> 3;
-                if (index < Long.BYTES) {
-                    return offset + index - roff;
+                final long result = SWARUtil.applyPattern(word, pattern);
+                if (result != 0) {
+                    return offset - roff + SWARUtil.getIndex(result, true);
                 }
             }
         }

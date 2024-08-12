@@ -16,6 +16,7 @@
 package io.netty5.util;
 
 import io.netty5.util.concurrent.ImmediateExecutor;
+import io.netty5.util.internal.MathUtil;
 import io.netty5.util.internal.PlatformDependent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +36,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static io.netty5.util.internal.ObjectUtil.checkInRange;
 import static io.netty5.util.internal.ObjectUtil.checkPositive;
 import static io.netty5.util.internal.StringUtil.simpleClassName;
 import static java.util.Objects.requireNonNull;
@@ -331,23 +331,13 @@ public class HashedWheelTimer implements Timer {
     }
 
     private static HashedWheelBucket[] createWheel(int ticksPerWheel) {
-        //ticksPerWheel may not be greater than 2^30
-        checkInRange(ticksPerWheel, 1, 1073741824, "ticksPerWheel");
+        ticksPerWheel = MathUtil.findNextPositivePowerOfTwo(ticksPerWheel);
 
-        ticksPerWheel = normalizeTicksPerWheel(ticksPerWheel);
         HashedWheelBucket[] wheel = new HashedWheelBucket[ticksPerWheel];
         for (int i = 0; i < wheel.length; i ++) {
             wheel[i] = new HashedWheelBucket();
         }
         return wheel;
-    }
-
-    private static int normalizeTicksPerWheel(int ticksPerWheel) {
-        int normalizedTicksPerWheel = 1;
-        while (normalizedTicksPerWheel < ticksPerWheel) {
-            normalizedTicksPerWheel <<= 1;
-        }
-        return normalizedTicksPerWheel;
     }
 
     /**
@@ -425,7 +415,14 @@ public class HashedWheelTimer implements Timer {
                 assert closed;
             }
         }
-        return worker.unprocessedTimeouts();
+        Set<Timeout> unprocessed = worker.unprocessedTimeouts();
+        Set<Timeout> cancelled = new HashSet<Timeout>(unprocessed.size());
+        for (Timeout timeout : unprocessed) {
+            if (timeout.cancel()) {
+                cancelled.add(timeout);
+            }
+        }
+        return cancelled;
     }
 
     @Override

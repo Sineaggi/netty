@@ -65,7 +65,7 @@
 
   <properties>
     <!-- Keep in sync with ../pom.xml -->
-    <tcnative.version>2.0.61.Final</tcnative.version>
+    <tcnative.version>2.0.65.Final</tcnative.version>
   </properties>
 
   <build>
@@ -108,11 +108,6 @@
       <dependency>
         <groupId>io.netty</groupId>
         <artifactId>netty5-common</artifactId>
-        <version>${project.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>io.netty</groupId>
-        <artifactId>netty5-dev-tools</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

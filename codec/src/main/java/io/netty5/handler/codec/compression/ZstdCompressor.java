@@ -28,12 +28,20 @@ import static io.netty5.handler.codec.compression.ZstdConstants.DEFAULT_BLOCK_SI
 import static io.netty5.handler.codec.compression.ZstdConstants.DEFAULT_COMPRESSION_LEVEL;
 import static io.netty5.handler.codec.compression.ZstdConstants.MAX_BLOCK_SIZE;
 import static io.netty5.handler.codec.compression.ZstdConstants.MAX_COMPRESSION_LEVEL;
+import static io.netty5.handler.codec.compression.ZstdConstants.MIN_COMPRESSION_LEVEL;
 
 /**
  *  Compresses a {@link Buffer} using the Zstandard algorithm.
  *  See <a href="https://facebook.github.io/zstd">Zstandard</a>.
  */
 public final class ZstdCompressor implements Compressor {
+    {
+        try {
+            io.netty5.handler.codec.compression.Zstd.ensureAvailability();
+        } catch (Throwable throwable) {
+            throw new ExceptionInInitializerError(throwable);
+        }
+    }
 
     private final int blockSize;
     private final int compressionLevel;
@@ -94,7 +102,7 @@ public final class ZstdCompressor implements Compressor {
      * @return the factory.
      */
     public static Supplier<ZstdCompressor> newFactory(int compressionLevel, int blockSize, int maxEncodeSize) {
-        ObjectUtil.checkInRange(compressionLevel, 0, MAX_COMPRESSION_LEVEL, "compressionLevel");
+        ObjectUtil.checkInRange(compressionLevel, MIN_COMPRESSION_LEVEL, MAX_COMPRESSION_LEVEL, "compressionLevel");
         ObjectUtil.checkPositive(blockSize, "blockSize");
         ObjectUtil.checkPositive(maxEncodeSize, "maxEncodeSize");
         return () -> new ZstdCompressor(compressionLevel, blockSize, maxEncodeSize);

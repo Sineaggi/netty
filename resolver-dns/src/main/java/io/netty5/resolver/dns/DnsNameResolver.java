@@ -21,6 +21,7 @@ import io.netty5.channel.AddressedEnvelope;
 import io.netty5.channel.Channel;
 import io.netty5.channel.ChannelFactory;
 import io.netty5.channel.ChannelHandler;
+import io.netty5.channel.ChannelHandlerAdapter;
 import io.netty5.channel.ChannelHandlerContext;
 import io.netty5.channel.ChannelInitializer;
 import io.netty5.channel.ChannelOption;
@@ -39,18 +40,15 @@ import io.netty5.handler.codec.dns.DnsRawRecord;
 import io.netty5.handler.codec.dns.DnsRecord;
 import io.netty5.handler.codec.dns.DnsRecordType;
 import io.netty5.handler.codec.dns.DnsResponse;
-import io.netty5.handler.codec.dns.TcpDnsQueryEncoder;
-import io.netty5.handler.codec.dns.TcpDnsResponseDecoder;
 import io.netty5.resolver.DefaultHostsFileEntriesResolver;
 import io.netty5.resolver.HostsFileEntries;
 import io.netty5.resolver.HostsFileEntriesResolver;
 import io.netty5.resolver.InetNameResolver;
 import io.netty5.resolver.ResolvedAddressTypes;
+import io.netty5.util.AttributeKey;
 import io.netty5.util.NetUtil;
-import io.netty5.util.ReferenceCounted;
 import io.netty5.util.Resource;
 import io.netty5.util.concurrent.EventExecutor;
-import io.netty5.util.concurrent.FastThreadLocal;
 import io.netty5.util.concurrent.Future;
 import io.netty5.util.concurrent.Promise;
 import io.netty5.util.internal.EmptyArrays;
@@ -91,6 +89,11 @@ import static java.util.Objects.requireNonNull;
  * A DNS-based {@link InetNameResolver}.
  */
 public class DnsNameResolver extends InetNameResolver {
+    /**
+     * An attribute used to mark all channels created by the {@link DnsNameResolver}.
+     */
+    public static final AttributeKey<Boolean> DNS_PIPELINE_ATTRIBUTE =
+            AttributeKey.newInstance("io.netty5.resolver.dns.pipeline");
 
     private static final Logger logger = LoggerFactory.getLogger(DnsNameResolver.class);
     private static final String LOCALHOST = "localhost";
@@ -113,6 +116,13 @@ public class DnsNameResolver extends InetNameResolver {
             {DnsRecordType.AAAA, DnsRecordType.A};
     private static final ProtocolFamily[] IPV6_PREFERRED_RESOLVED_PROTOCOL_FAMILIES =
             {StandardProtocolFamily.INET6, StandardProtocolFamily.INET};
+
+    private static final ChannelHandler NOOP_HANDLER = new ChannelHandlerAdapter() {
+        @Override
+        public boolean isSharable() {
+            return true;
+        }
+    };
 
     static final ResolvedAddressTypes DEFAULT_RESOLVE_ADDRESS_TYPES;
     static final String[] DEFAULT_SEARCH_DOMAINS;
@@ -204,7 +214,6 @@ public class DnsNameResolver extends InetNameResolver {
         }
     };
     private static final DatagramDnsQueryEncoder DATAGRAM_ENCODER = new DatagramDnsQueryEncoder();
-    private static final TcpDnsQueryEncoder TCP_ENCODER = new TcpDnsQueryEncoder();
 
     private final Promise<Channel> channelReadyPromise;
     private final Channel ch;
@@ -222,15 +231,7 @@ public class DnsNameResolver extends InetNameResolver {
     private final DnsCache resolveCache;
     private final AuthoritativeDnsServerCache authoritativeDnsServerCache;
     private final DnsCnameCache cnameCache;
-
-    private final FastThreadLocal<DnsServerAddressStream> nameServerAddrStream =
-            new FastThreadLocal<>() {
-                @Override
-                protected DnsServerAddressStream initialValue() {
-                    return dnsServerAddressStreamProvider.nameServerAddressStream("");
-                }
-            };
-
+    private final DnsServerAddressStream queryDnsServerAddressStream;
     private final long queryTimeoutMillis;
     private final int maxQueriesPerResolve;
     private final ResolvedAddressTypes resolvedAddressTypes;
@@ -250,6 +251,7 @@ public class DnsNameResolver extends InetNameResolver {
     private final DnsQueryLifecycleObserverFactory dnsQueryLifecycleObserverFactory;
     private final boolean completeOncePreferredResolved;
     private final Bootstrap socketBootstrap;
+    private final boolean retryWithTcpOnTimeout;
 
     private final int maxNumConsolidation;
     private final Map<String, Future<List<InetAddress>>> inflightLookups;
@@ -349,43 +351,19 @@ public class DnsNameResolver extends InetNameResolver {
             String[] searchDomains,
             int ndots,
             boolean decodeIdn) {
-        this(eventLoop, channelFactory, null, resolveCache, NoopDnsCnameCache.INSTANCE, authoritativeDnsServerCache,
+        this(eventLoop, channelFactory, null, false, resolveCache,
+                NoopDnsCnameCache.INSTANCE, authoritativeDnsServerCache, null,
              dnsQueryLifecycleObserverFactory, queryTimeoutMillis, resolvedAddressTypes, recursionDesired,
              maxQueriesPerResolve, maxPayloadSize, optResourceEnabled, hostsFileEntriesResolver,
-             dnsServerAddressStreamProvider, searchDomains, ndots, decodeIdn, false);
+             dnsServerAddressStreamProvider, new ThreadLocalNameServerAddressStream(dnsServerAddressStreamProvider),
+                searchDomains, ndots, decodeIdn, false, 0);
     }
 
     DnsNameResolver(
             EventLoop eventLoop,
             ChannelFactory<? extends DatagramChannel> channelFactory,
             ChannelFactory<? extends SocketChannel> socketChannelFactory,
-            final DnsCache resolveCache,
-            final DnsCnameCache cnameCache,
-            final AuthoritativeDnsServerCache authoritativeDnsServerCache,
-            DnsQueryLifecycleObserverFactory dnsQueryLifecycleObserverFactory,
-            long queryTimeoutMillis,
-            ResolvedAddressTypes resolvedAddressTypes,
-            boolean recursionDesired,
-            int maxQueriesPerResolve,
-            int maxPayloadSize,
-            boolean optResourceEnabled,
-            HostsFileEntriesResolver hostsFileEntriesResolver,
-            DnsServerAddressStreamProvider dnsServerAddressStreamProvider,
-            String[] searchDomains,
-            int ndots,
-            boolean decodeIdn,
-            boolean completeOncePreferredResolved) {
-        this(eventLoop, channelFactory, socketChannelFactory, resolveCache, cnameCache, authoritativeDnsServerCache,
-                null, dnsQueryLifecycleObserverFactory, queryTimeoutMillis, resolvedAddressTypes,
-                recursionDesired, maxQueriesPerResolve, maxPayloadSize, optResourceEnabled,
-                hostsFileEntriesResolver, dnsServerAddressStreamProvider, searchDomains, ndots, decodeIdn,
-                completeOncePreferredResolved, 0);
-    }
-
-    DnsNameResolver(
-            EventLoop eventLoop,
-            ChannelFactory<? extends DatagramChannel> channelFactory,
-            ChannelFactory<? extends SocketChannel> socketChannelFactory,
+            boolean retryWithTcpOnTimeout,
             final DnsCache resolveCache,
             final DnsCnameCache cnameCache,
             final AuthoritativeDnsServerCache authoritativeDnsServerCache,
@@ -399,6 +377,7 @@ public class DnsNameResolver extends InetNameResolver {
             boolean optResourceEnabled,
             HostsFileEntriesResolver hostsFileEntriesResolver,
             DnsServerAddressStreamProvider dnsServerAddressStreamProvider,
+            DnsServerAddressStream queryDnsServerAddressStream,
             String[] searchDomains,
             int ndots,
             boolean decodeIdn,
@@ -416,14 +395,17 @@ public class DnsNameResolver extends InetNameResolver {
         this.hostsFileEntriesResolver = requireNonNull(hostsFileEntriesResolver, "hostsFileEntriesResolver");
         this.dnsServerAddressStreamProvider =
                 requireNonNull(dnsServerAddressStreamProvider, "dnsServerAddressStreamProvider");
+        this.queryDnsServerAddressStream = requireNonNull(queryDnsServerAddressStream, "queryDnsServerAddressStream");
         this.resolveCache = requireNonNull(resolveCache, "resolveCache");
         this.cnameCache = requireNonNull(cnameCache, "cnameCache");
         this.dnsQueryLifecycleObserverFactory =
                 requireNonNull(dnsQueryLifecycleObserverFactory, "dnsQueryLifecycleObserverFactory");
+
         this.searchDomains = searchDomains != null ? searchDomains.clone() : DEFAULT_SEARCH_DOMAINS;
         this.ndots = ndots >= 0 ? ndots : DEFAULT_OPTIONS.ndots();
         this.decodeIdn = decodeIdn;
         this.completeOncePreferredResolved = completeOncePreferredResolved;
+        this.retryWithTcpOnTimeout = retryWithTcpOnTimeout;
         if (socketChannelFactory == null) {
             socketBootstrap = null;
         } else {
@@ -431,7 +413,13 @@ public class DnsNameResolver extends InetNameResolver {
             socketBootstrap.option(ChannelOption.SO_REUSEADDR, true)
                     .group(executor())
                     .channelFactory(socketChannelFactory)
-                    .handler(TCP_ENCODER);
+                    .attr(DNS_PIPELINE_ATTRIBUTE, Boolean.TRUE)
+                    .handler(NOOP_HANDLER);
+            if (queryTimeoutMillis > 0 && queryTimeoutMillis <= Integer.MAX_VALUE) {
+                // Set the connect timeout to the same as queryTimeout as otherwise it might take a long
+                // time for the query to fail in case of a connection timeout.
+                socketBootstrap.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) queryTimeoutMillis);
+            }
         }
         switch (this.resolvedAddressTypes) {
             case IPV4_ONLY:
@@ -474,9 +462,10 @@ public class DnsNameResolver extends InetNameResolver {
         } else {
             inflightLookups = null;
         }
-        Bootstrap b = new Bootstrap();
-        b.group(executor());
-        b.channelFactory(channelFactory);
+        Bootstrap b = new Bootstrap()
+                .group(executor())
+                .channelFactory(channelFactory)
+                .attr(DNS_PIPELINE_ATTRIBUTE, Boolean.TRUE);
         channelReadyPromise = executor().newPromise();
         final DnsResponseHandler responseHandler = new DnsResponseHandler(channelReadyPromise);
         b.handler(new ChannelInitializer<DatagramChannel>() {
@@ -491,17 +480,13 @@ public class DnsNameResolver extends InetNameResolver {
             }
         });
         b.option(ChannelOption.READ_HANDLE_FACTORY, new FixedReadHandleFactory(maxPayloadSize));
-
+        if (localAddress == null) {
+            localAddress = new InetSocketAddress(0);
+        }
         try {
-            Future<Void> future;
-            if (localAddress == null) {
-                b.option(ChannelOption.DATAGRAM_CHANNEL_ACTIVE_ON_REGISTRATION, true);
-                ch = b.createUnregistered();
-                future = ch.register();
-            } else {
-                ch = b.createUnregistered();
-                future = ch.bind(localAddress);
-            }
+            ch = b.createUnregistered();
+            SocketAddress local = localAddress;
+            Future<Void> future = ch.register().flatMap(__ -> ch.bind(local));
             if (future.isFailed()) {
                 throw future.cause();
             } else if (!future.isSuccess()) {
@@ -591,6 +576,13 @@ public class DnsNameResolver extends InetNameResolver {
      */
     public long queryTimeoutMillis() {
         return queryTimeoutMillis;
+    }
+
+    /**
+     * Returns the dns server address stream used for DNS queries (not resolve).
+     */
+    public DnsServerAddressStream queryDnsServerAddressStream() {
+        return queryDnsServerAddressStream;
     }
 
     /**
@@ -893,7 +885,8 @@ public class DnsNameResolver extends InetNameResolver {
         // It was not A/AAAA question or there was no entry in /etc/hosts.
         final DnsServerAddressStream nameServerAddrs =
                 dnsServerAddressStreamProvider.nameServerAddressStream(hostname);
-        new DnsRecordResolveContext(this, ch, promise, question, additionals, nameServerAddrs, maxQueriesPerResolve)
+        new DnsRecordResolveContext(this, ch, channelReadyPromise.asFuture(),
+                promise, question, additionals, nameServerAddrs, maxQueriesPerResolve)
                 .resolve(promise);
         return promise.asFuture();
     }
@@ -1063,19 +1056,36 @@ public class DnsNameResolver extends InetNameResolver {
             return;
         }
 
-        if (!doResolveAllCached(hostname, additionals, promise, resolveCache, resolvedProtocolFamilies)) {
+        if (!doResolveAllCached(hostname, additionals, promise, resolveCache, this.searchDomains(),
+                ndots(), resolvedProtocolFamilies)) {
             doResolveAllUncached(hostname, additionals, promise, promise,
                                  resolveCache, completeOncePreferredResolved);
         }
+    }
+
+    private static boolean hasEntries(List<? extends DnsCacheEntry> cachedEntries) {
+        return cachedEntries != null && !cachedEntries.isEmpty();
     }
 
     static boolean doResolveAllCached(String hostname,
                                       DnsRecord[] additionals,
                                       Promise<List<InetAddress>> promise,
                                       DnsCache resolveCache,
+                                      String[] searchDomains,
+                                      int ndots,
                                       ProtocolFamily[] resolvedInternetProtocolFamilies) {
-        final List<? extends DnsCacheEntry> cachedEntries = resolveCache.get(hostname, additionals);
-        if (cachedEntries == null || cachedEntries.isEmpty()) {
+        List<? extends DnsCacheEntry> cachedEntries = resolveCache.get(hostname, additionals);
+        if (!hasEntries(cachedEntries) && searchDomains != null && ndots != 0
+                && !StringUtil.endsWith(hostname, '.')) {
+            for (String searchDomain : searchDomains) {
+                final String initialHostname = hostname + '.' + searchDomain;
+                cachedEntries = resolveCache.get(initialHostname, additionals);
+                if (hasEntries(cachedEntries)) {
+                    break;
+                }
+            }
+        }
+        if (!hasEntries(cachedEntries)) {
             return false;
         }
 
@@ -1172,8 +1182,8 @@ public class DnsNameResolver extends InetNameResolver {
                             final boolean completeEarlyIfPossible) {
         final DnsServerAddressStream nameServerAddrs =
                 dnsServerAddressStreamProvider.nameServerAddressStream(hostname);
-        DnsAddressResolveContext ctx = new DnsAddressResolveContext(this, ch, originalPromise, hostname,
-                additionals, nameServerAddrs, maxQueriesPerResolve, resolveCache,
+        DnsAddressResolveContext ctx = new DnsAddressResolveContext(this, ch, channelReadyPromise.asFuture(),
+                originalPromise, hostname, additionals, nameServerAddrs, maxQueriesPerResolve, resolveCache,
                 authoritativeDnsServerCache, completeEarlyIfPossible);
         ctx.resolve(promise);
     }
@@ -1211,7 +1221,7 @@ public class DnsNameResolver extends InetNameResolver {
     }
 
     private InetSocketAddress nextNameServerAddress() {
-        return nameServerAddrStream.get().next();
+        return queryDnsServerAddressStream.next();
     }
 
     /**
@@ -1219,9 +1229,8 @@ public class DnsNameResolver extends InetNameResolver {
      */
     public Future<AddressedEnvelope<DnsResponse, InetSocketAddress>> query(
             InetSocketAddress nameServerAddr, DnsQuestion question) {
-
-        return query0(nameServerAddr, question, NoopDnsQueryLifecycleObserver.INSTANCE,
-                EMPTY_ADDITIONALS, true, ch.newPromise());
+        return doQuery(ch, channelReadyPromise.asFuture(), nameServerAddr, question,
+                NoopDnsQueryLifecycleObserver.INSTANCE, EMPTY_ADDITIONALS, true, ch.newPromise());
     }
 
     /**
@@ -1230,8 +1239,8 @@ public class DnsNameResolver extends InetNameResolver {
     public Future<AddressedEnvelope<DnsResponse, InetSocketAddress>> query(
             InetSocketAddress nameServerAddr, DnsQuestion question, Iterable<DnsRecord> additionals) {
 
-        return query0(nameServerAddr, question, NoopDnsQueryLifecycleObserver.INSTANCE,
-                toArray(additionals, false), true, ch.newPromise());
+        return doQuery(ch, channelReadyPromise.asFuture(), nameServerAddr, question,
+                NoopDnsQueryLifecycleObserver.INSTANCE, toArray(additionals, false), true, ch.newPromise());
     }
 
     /**
@@ -1241,8 +1250,8 @@ public class DnsNameResolver extends InetNameResolver {
             InetSocketAddress nameServerAddr, DnsQuestion question,
             Promise<AddressedEnvelope<? extends DnsResponse, InetSocketAddress>> promise) {
 
-        return query0(nameServerAddr, question, NoopDnsQueryLifecycleObserver.INSTANCE,
-                EMPTY_ADDITIONALS, true, promise);
+        return doQuery(ch, channelReadyPromise.asFuture(), nameServerAddr, question,
+                NoopDnsQueryLifecycleObserver.INSTANCE, EMPTY_ADDITIONALS, true, promise);
     }
 
     /**
@@ -1253,8 +1262,8 @@ public class DnsNameResolver extends InetNameResolver {
             Iterable<DnsRecord> additionals,
             Promise<AddressedEnvelope<? extends DnsResponse, InetSocketAddress>> promise) {
 
-        return query0(nameServerAddr, question, NoopDnsQueryLifecycleObserver.INSTANCE,
-                toArray(additionals, false), true, promise);
+        return doQuery(ch, channelReadyPromise.asFuture(), nameServerAddr, question,
+                NoopDnsQueryLifecycleObserver.INSTANCE, toArray(additionals, false), true, promise);
     }
 
     /**
@@ -1275,24 +1284,21 @@ public class DnsNameResolver extends InetNameResolver {
         return cause != null && cause.getCause() instanceof DnsNameResolverTimeoutException;
     }
 
-    final void flushQueries() {
-        ch.flush();
-    }
-
-    final Future<AddressedEnvelope<DnsResponse, InetSocketAddress>> query0(
+    final Future<AddressedEnvelope<DnsResponse, InetSocketAddress>> doQuery(
+            Channel channel, Future<? extends Channel> channelReadyFuture,
             InetSocketAddress nameServerAddr, DnsQuestion question,
             final DnsQueryLifecycleObserver queryLifecycleObserver,
-            DnsRecord[] additionals,
-            boolean flush,
+            DnsRecord[] additionals, boolean flush,
             Promise<AddressedEnvelope<? extends DnsResponse, InetSocketAddress>> promise) {
         final Promise<AddressedEnvelope<DnsResponse, InetSocketAddress>> castPromise = cast(
                 requireNonNull(promise, "promise"));
         final int payloadSize = isOptResourceEnabled() ? maxPayloadSize() : 0;
         try {
-            DnsQueryContext queryContext = new DatagramDnsQueryContext(ch, channelReadyPromise.asFuture(),
-                    nameServerAddr, queryContextManager, payloadSize, isRecursionDesired(), question, additionals,
-                    castPromise);
-            Future<Void> future = queryContext.writeQuery(queryTimeoutMillis(), flush);
+            DnsQueryContext queryContext = new DatagramDnsQueryContext(channel,
+                    channelReadyFuture, nameServerAddr,
+                    queryContextManager, payloadSize, isRecursionDesired(), queryTimeoutMillis(), question, additionals,
+                    castPromise, socketBootstrap, retryWithTcpOnTimeout);
+            Future<Void> future = queryContext.writeQuery(flush);
             queryLifecycleObserver.queryWritten(nameServerAddr, future);
         } catch (Exception e) {
             castPromise.setFailure(e);
@@ -1336,90 +1342,8 @@ public class DnsNameResolver extends InetNameResolver {
                 res.release();
                 return;
             }
-
-            // Check if the response was truncated and if we can fallback to TCP to retry.
-            if (!res.isTruncated() || socketBootstrap == null) {
-                qCtx.finishSuccess(res);
-                return;
-            }
-
-            socketBootstrap.connect(res.sender()).addListener(future -> {
-                if (future.isFailed()) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("{} Unable to fallback to TCP [{}: {}]",
-                                ch, queryId, res.sender(), future.cause());
-                    }
-
-                    // TCP fallback failed, just use the truncated response.
-                    qCtx.finishSuccess(res);
-                    return;
-                }
-                final Channel tcpCh = future.getNow();
-
-                Promise<AddressedEnvelope<DnsResponse, InetSocketAddress>> promise =
-                        tcpCh.newPromise();
-                final int payloadSize = isOptResourceEnabled() ? maxPayloadSize() : 0;
-                final TcpDnsQueryContext tcpCtx = new TcpDnsQueryContext(tcpCh, channelReadyPromise.asFuture(),
-                        (InetSocketAddress) tcpCh.remoteAddress(), queryContextManager, payloadSize,
-                        isRecursionDesired(), qCtx.question(), EMPTY_ADDITIONALS, promise);
-
-                tcpCh.pipeline().addLast(new TcpDnsResponseDecoder());
-                tcpCh.pipeline().addLast(new ChannelHandler() {
-                    @Override
-                    public void channelRead(ChannelHandlerContext ctx1, Object msg1) {
-                        Channel tcpCh = ctx1.channel();
-                        DnsResponse response = (DnsResponse) msg1;
-                        int queryId1 = response.id();
-
-                        if (logger.isDebugEnabled()) {
-                            logger.debug("{} RECEIVED: TCP [{}: {}], {}", tcpCh, queryId,
-                                    tcpCh.remoteAddress(), response);
-                        }
-                        DnsQueryContext foundCtx = queryContextManager.get(res.sender(), queryId1);
-                        if (foundCtx != null && foundCtx.isDone()) {
-                            logger.debug("{} Received a DNS response for a query that was timed out or cancelled " +
-                                    ": TCP [{}: {}]", tcpCh, queryId, res.sender());
-                            response.release();
-                        } else if (foundCtx == tcpCtx) {
-                            tcpCtx.finishSuccess(new AddressedEnvelopeAdapter(
-                                    (InetSocketAddress) tcpCh.remoteAddress(),
-                                    (InetSocketAddress) tcpCh.localAddress(),
-                                    response));
-                        } else {
-                            response.release();
-                            tcpCtx.finishFailure(
-                                    "Received TCP DNS response with unexpected ID", null, false);
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("{} Received a DNS response with an unexpected ID: TCP [{}: {}]",
-                                        tcpCh, queryId, tcpCh.remoteAddress());
-                            }
-                        }
-                    }
-
-                    @Override
-                    public void channelExceptionCaught(ChannelHandlerContext ctx1, Throwable cause) {
-                        if (tcpCtx.finishFailure(
-                                "TCP fallback error", cause, false) && logger.isDebugEnabled()) {
-                            logger.debug("{} Error during processing response: TCP [{}: {}]",
-                                    ctx1.channel(), queryId,
-                                    ctx1.channel().remoteAddress(), cause);
-                        }
-                    }
-                });
-
-                promise.asFuture().addListener(addressEnvelopeFuture -> {
-
-                    if (addressEnvelopeFuture.isSuccess()) {
-                        qCtx.finishSuccess(addressEnvelopeFuture.getNow());
-                        res.release();
-                    } else {
-                        // TCP fallback failed, just use the truncated response.
-                        qCtx.finishSuccess(res);
-                    }
-                    tcpCh.close();
-                });
-                tcpCtx.writeQuery(queryTimeoutMillis(), true);
-            });
+            // The context will handle truncation itself.
+            qCtx.finishSuccess(res, res.isTruncated());
         }
 
         @Override
@@ -1435,116 +1359,6 @@ public class DnsNameResolver extends InetNameResolver {
             } else {
                 logger.warn("{} Unexpected exception: UDP", ctx.channel(), cause);
             }
-        }
-    }
-
-    private static final class AddressedEnvelopeAdapter implements AddressedEnvelope<DnsResponse, InetSocketAddress>,
-                                                                   ReferenceCounted {
-        private final InetSocketAddress sender;
-        private final InetSocketAddress recipient;
-        private final DnsResponse response;
-
-        AddressedEnvelopeAdapter(InetSocketAddress sender, InetSocketAddress recipient, DnsResponse response) {
-            this.sender = sender;
-            this.recipient = recipient;
-            this.response = response;
-        }
-
-        @Override
-        public DnsResponse content() {
-            return response;
-        }
-
-        @Override
-        public InetSocketAddress sender() {
-            return sender;
-        }
-
-        @Override
-        public InetSocketAddress recipient() {
-            return recipient;
-        }
-
-        @Override
-        public AddressedEnvelopeAdapter retain() {
-            response.retain();
-            return this;
-        }
-
-        @Override
-        public AddressedEnvelopeAdapter retain(int increment) {
-            response.retain(increment);
-            return this;
-        }
-
-        @Override
-        public AddressedEnvelopeAdapter touch() {
-            response.touch();
-            return this;
-        }
-
-        @Override
-        public AddressedEnvelopeAdapter touch(Object hint) {
-            response.touch(hint);
-            return this;
-        }
-
-        @Override
-        public int refCnt() {
-            return response.refCnt();
-        }
-
-        @Override
-        public boolean release() {
-            return response.release();
-        }
-
-        @Override
-        public boolean release(int decrement) {
-            return response.release(decrement);
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj) {
-                return true;
-            }
-
-            if (!(obj instanceof AddressedEnvelope)) {
-                return false;
-            }
-
-            @SuppressWarnings("unchecked")
-            final AddressedEnvelope<?, SocketAddress> that = (AddressedEnvelope<?, SocketAddress>) obj;
-            if (sender() == null) {
-                if (that.sender() != null) {
-                    return false;
-                }
-            } else if (!sender().equals(that.sender())) {
-                return false;
-            }
-
-            if (recipient() == null) {
-                if (that.recipient() != null) {
-                    return false;
-                }
-            } else if (!recipient().equals(that.recipient())) {
-                return false;
-            }
-
-            return response.equals(obj);
-        }
-
-        @Override
-        public int hashCode() {
-            int hashCode = response.hashCode();
-            if (sender() != null) {
-                hashCode = hashCode * 31 + sender().hashCode();
-            }
-            if (recipient() != null) {
-                hashCode = hashCode * 31 + recipient().hashCode();
-            }
-            return hashCode;
         }
     }
 }
